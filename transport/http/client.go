@@ -2,10 +2,11 @@ package http
 
 import (
 	"context"
-	"encoding/json"
+	"io/ioutil"
 	"net/http"
 	"time"
 
+	"github.com/go-kratos/kratos/v2/encoding"
 	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/transport"
@@ -89,7 +90,7 @@ func (t *baseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", t.userAgent)
 	}
-	ctx := transport.NewContext(req.Context(), transport.Transport{Kind: "HTTP"})
+	ctx := transport.NewContext(req.Context(), transport.Transport{Kind: transport.KindHTTP})
 	ctx = NewClientContext(ctx, ClientInfo{Request: req})
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
@@ -116,11 +117,24 @@ func Do(client *http.Client, req *http.Request, target interface{}) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		se := &errors.StatusError{}
-		if err := json.NewDecoder(req.Body).Decode(se); err != nil {
+		se := &errors.StatusError{Code: 2}
+		if err := decodeResponse(res, se); err != nil {
 			return err
 		}
 		return se
 	}
-	return json.NewDecoder(req.Body).Decode(target)
+	return decodeResponse(res, target)
+}
+
+func decodeResponse(res *http.Response, target interface{}) error {
+	subtype := contentSubtype(res.Header.Get(contentTypeHeader))
+	codec := encoding.GetCodec(subtype)
+	if codec == nil {
+		codec = encoding.GetCodec("json")
+	}
+	data, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	return codec.Unmarshal(data, target)
 }

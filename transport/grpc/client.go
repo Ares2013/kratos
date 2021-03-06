@@ -83,11 +83,10 @@ func dial(ctx context.Context, insecure bool, opts ...ClientOption) (*grpc.Clien
 		o(&options)
 	}
 	var grpcOpts = []grpc.DialOption{
-		grpc.WithTimeout(options.timeout),
-		grpc.WithUnaryInterceptor(UnaryClientInterceptor(options.middleware)),
+		grpc.WithUnaryInterceptor(unaryClientInterceptor(options.middleware, options.timeout)),
 	}
 	if options.discoverer != nil {
-		grpc.WithResolvers(discovery.NewBuilder(options.discoverer))
+		grpcOpts = append(grpcOpts, grpc.WithResolvers(discovery.NewBuilder(options.discoverer)))
 	}
 	if insecure {
 		grpcOpts = append(grpcOpts, grpc.WithInsecure())
@@ -98,11 +97,15 @@ func dial(ctx context.Context, insecure bool, opts ...ClientOption) (*grpc.Clien
 	return grpc.DialContext(ctx, options.endpoint, grpcOpts...)
 }
 
-// UnaryClientInterceptor retruns a unary client interceptor.
-func UnaryClientInterceptor(m middleware.Middleware) grpc.UnaryClientInterceptor {
+func unaryClientInterceptor(m middleware.Middleware, timeout time.Duration) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = transport.NewContext(ctx, transport.Transport{Kind: "gRPC"})
+		ctx = transport.NewContext(ctx, transport.Transport{Kind: transport.KindGRPC})
 		ctx = NewClientContext(ctx, ClientInfo{FullMethod: method})
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
 		h := func(ctx context.Context, req interface{}) (interface{}, error) {
 			return reply, invoker(ctx, method, req, reply, cc, opts...)
 		}

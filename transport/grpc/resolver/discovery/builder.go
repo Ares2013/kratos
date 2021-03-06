@@ -26,9 +26,9 @@ type builder struct {
 }
 
 // NewBuilder creates a builder which is used to factory registry resolvers.
-func NewBuilder(r registry.Discoverer, opts ...Option) resolver.Builder {
+func NewBuilder(d registry.Discoverer, opts ...Option) resolver.Builder {
 	b := &builder{
-		discoverer: r,
+		discoverer: d,
 		logger:     log.DefaultLogger,
 	}
 	for _, o := range opts {
