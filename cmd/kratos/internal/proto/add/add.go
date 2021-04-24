@@ -21,6 +21,10 @@ func run(cmd *cobra.Command, args []string) {
 	// kratos add helloworld/v1/helloworld.proto
 	input := args[0]
 	n := strings.LastIndex(input, "/")
+	if n == -1 {
+		fmt.Println("The proto path needs to be hierarchical.")
+		return
+	}
 	path := input[:n]
 	fileName := input[n+1:]
 	pkgName := strings.ReplaceAll(path, "/", ".")
@@ -59,7 +63,7 @@ func javaPackage(name string) string {
 }
 
 func serviceName(name string) string {
-	return unexport(strings.Split(name, ".")[0])
+	return export(strings.Split(name, ".")[0])
 }
 
-func unexport(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
+func export(s string) string { return strings.ToUpper(s[:1]) + s[1:] }

@@ -1,10 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net/http"
 
+	"github.com/go-kratos/kratos/examples/ws/handler"
 	"github.com/go-kratos/kratos/v2"
 	transhttp "github.com/go-kratos/kratos/v2/transport/http"
 	"github.com/gorilla/mux"
@@ -12,15 +11,13 @@ import (
 
 func main() {
 	router := mux.NewRouter()
-	router.HandleFunc("/home", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Fprint(w, "Hello Gorilla Mux!")
-	}).Methods("GET")
+	router.HandleFunc("/ws", handler.WsHandler)
 
-	httpSrv := transhttp.NewServer(transhttp.Address(":8000"))
+	httpSrv := transhttp.NewServer(transhttp.Address(":8080"))
 	httpSrv.HandlePrefix("/", router)
 
 	app := kratos.New(
-		kratos.Name("mux"),
+		kratos.Name("ws"),
 		kratos.Server(
 			httpSrv,
 		),
