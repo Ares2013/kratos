@@ -27,7 +27,7 @@ func New{{.ServiceType}}Handler(srv {{.ServiceType}}Handler, opts ...http1.Handl
 			return
 		}
 		{{if ne (len .Vars) 0}}
-		if err := binding.MapProto(&in, mux.Vars(r)); err != nil {
+		if err := binding.BindVars(mux.Vars(r), &in); err != nil {
 			h.Error(w, r, err)
 			return
 		}
@@ -51,6 +51,38 @@ func New{{.ServiceType}}Handler(srv {{.ServiceType}}Handler, opts ...http1.Handl
 	{{end}}
 	return r
 }
+
+type {{.ServiceType}}HTTPClient interface {
+{{range .MethodSets}}
+	{{.Name}}(ctx context.Context, req *{{.Request}}, opts ...http1.CallOption) (rsp *{{.Reply}}, err error) 
+{{end}}
+}
+	
+type {{.ServiceType}}HTTPClientImpl struct{
+	cc *http1.Client
+}
+	
+func New{{.ServiceType}}HTTPClient (client *http1.Client) {{.ServiceType}}HTTPClient {
+	return &{{.ServiceType}}HTTPClientImpl{client}
+}
+	
+{{$svrType := .ServiceType}}
+{{$svrName := .ServiceName}}
+{{range .MethodSets}}
+func (c *{{$svrType}}HTTPClientImpl) {{.Name}}(ctx context.Context, in *{{.Request}}, opts ...http1.CallOption) (out *{{.Reply}}, err error) {
+	path := binding.EncodePath("{{.Method}}", "{{.Path}}", in)
+	out = &{{.Reply}}{}
+	{{if .HasBody }}
+	err = c.cc.Invoke(ctx, path, in{{.Body}}, &out{{.ResponseBody}}, http1.Method("{{.Method}}"), http1.PathPattern("{{.Path}}"))
+	{{else}} 
+	err = c.cc.Invoke(ctx, path, nil, &out{{.ResponseBody}}, http1.Method("{{.Method}}"), http1.PathPattern("{{.Path}}"))
+	{{end}}
+	if err != nil {
+		return
+	}
+	return 
+}
+{{end}}
 `
 
 type serviceDesc struct {
@@ -66,12 +98,12 @@ type methodDesc struct {
 	Name    string
 	Num     int
 	Vars    []string
-	Forms   []string
 	Request string
 	Reply   string
 	// http_rule
 	Path         string
 	Method       string
+	HasBody      bool
 	Body         string
 	ResponseBody string
 }

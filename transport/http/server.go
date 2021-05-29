@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/internal/host"
@@ -15,11 +16,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
-const loggerName = "transport/http"
-
 var _ transport.Server = (*Server)(nil)
+var _ transport.Endpointer = (*Server)(nil)
 
-// ServerOption is HTTP server option.
+// ServerOption is an HTTP server option.
 type ServerOption func(*Server)
 
 // Network with server network.
@@ -46,11 +46,11 @@ func Timeout(timeout time.Duration) ServerOption {
 // Logger with server logger.
 func Logger(logger log.Logger) ServerOption {
 	return func(s *Server) {
-		s.log = log.NewHelper(loggerName, logger)
+		s.log = log.NewHelper(logger)
 	}
 }
 
-// Server is a HTTP server wrapper.
+// Server is an HTTP server wrapper.
 type Server struct {
 	*http.Server
 	lis     net.Listener
@@ -61,13 +61,13 @@ type Server struct {
 	log     *log.Helper
 }
 
-// NewServer creates a HTTP server by options.
+// NewServer creates an HTTP server by options.
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
 		network: "tcp",
 		address: ":0",
 		timeout: time.Second,
-		log:     log.NewHelper(loggerName, log.DefaultLogger),
+		log:     log.NewHelper(log.DefaultLogger),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -105,6 +105,13 @@ func (s *Server) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 // examples:
 //   http://127.0.0.1:8000?isSecure=false
 func (s *Server) Endpoint() (string, error) {
+	if s.lis == nil && strings.HasSuffix(s.address, ":0") {
+		lis, err := net.Listen(s.network, s.address)
+		if err != nil {
+			return "", err
+		}
+		s.lis = lis
+	}
 	addr, err := host.Extract(s.address, s.lis)
 	if err != nil {
 		return "", err
@@ -114,13 +121,15 @@ func (s *Server) Endpoint() (string, error) {
 
 // Start start the HTTP server.
 func (s *Server) Start() error {
-	lis, err := net.Listen(s.network, s.address)
-	if err != nil {
-		return err
+	if s.lis == nil {
+		lis, err := net.Listen(s.network, s.address)
+		if err != nil {
+			return err
+		}
+		s.lis = lis
 	}
-	s.lis = lis
-	s.log.Infof("[HTTP] server listening on: %s", lis.Addr().String())
-	if err := s.Serve(lis); !errors.Is(err, http.ErrServerClosed) {
+	s.log.Infof("[HTTP] server listening on: %s", s.lis.Addr().String())
+	if err := s.Serve(s.lis); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

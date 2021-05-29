@@ -5,18 +5,16 @@ import (
 	"testing"
 )
 
-func TestLogger(t *testing.T) {
+func TestInfo(t *testing.T) {
 	logger := DefaultLogger
-	Debug(logger).Print("log", "test debug")
-	Info(logger).Print("log", "test info")
-	Warn(logger).Print("log", "test warn")
-	Error(logger).Print("log", "test error")
+	logger = With(logger, "ts", DefaultTimestamp, "caller", DefaultCaller)
+	logger.Log(LevelInfo, "key1", "value1")
 }
 
 func TestWrapper(t *testing.T) {
 	out := NewStdLogger(os.Stdout)
 	err := NewStdLogger(os.Stderr)
 
-	l := Wrap(out, err)
-	l.Print("message", "test")
+	l := With(MultiLogger(out, err), "ts", DefaultTimestamp, "caller", DefaultCaller)
+	l.Log(LevelInfo, "msg", "test")
 }

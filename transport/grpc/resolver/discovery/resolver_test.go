@@ -15,8 +15,9 @@ type testClientConn struct {
 	te                  *testing.T
 }
 
-func (t *testClientConn) UpdateState(s resolver.State) {
+func (t *testClientConn) UpdateState(s resolver.State) error {
 	t.te.Log("UpdateState", s)
+	return nil
 }
 
 type testWatch struct {
@@ -45,7 +46,7 @@ func TestWatch(t *testing.T) {
 	r := &discoveryResolver{
 		w:      &testWatch{},
 		cc:     &testClientConn{te: t},
-		log:    log.NewHelper("grpc/resolver/discovery", log.DefaultLogger),
+		log:    log.NewHelper(log.DefaultLogger),
 		ctx:    ctx,
 		cancel: cancel,
 	}

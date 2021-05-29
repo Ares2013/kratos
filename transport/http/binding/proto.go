@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 )
 
 // MapProto sets a value in a nested Protobuf structure.
+// Deprecated: use BindValue instead.
 func MapProto(msg proto.Message, values map[string]string) error {
 	for key, value := range values {
 		if err := populateFieldValues(msg.ProtoReflect(), strings.Split(key, "."), []string{value}); err != nil {
@@ -51,7 +51,7 @@ func populateFieldValues(v protoreflect.Message, fieldPath []string, values []st
 		if fd = fields.ByName(protoreflect.Name(fieldName)); fd == nil {
 			fd = fields.ByJSONName(fieldName)
 			if fd == nil {
-				log.Printf("field not found in %q: %q\n", v.Descriptor().FullName(), strings.Join(fieldPath, "."))
+				// ignore unexpected field.
 				return nil
 			}
 		}

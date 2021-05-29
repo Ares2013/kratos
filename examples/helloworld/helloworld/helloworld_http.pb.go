@@ -32,16 +32,16 @@ func NewGreeterHandler(srv GreeterHandler, opts ...http1.HandleOption) http.Hand
 
 	r.HandleFunc("/helloworld/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var in HelloRequest
-
-		if err := binding.MapProto(&in, mux.Vars(r)); err != nil {
-			h.Error(w, r, err)
-			return
-		}
-
 		if err := h.Decode(r, &in); err != nil {
 			h.Error(w, r, err)
 			return
 		}
+
+		if err := binding.BindVars(mux.Vars(r), &in); err != nil {
+			h.Error(w, r, err)
+			return
+		}
+
 		next := func(ctx context.Context, req interface{}) (interface{}, error) {
 			return srv.SayHello(ctx, req.(*HelloRequest))
 		}
@@ -53,10 +53,35 @@ func NewGreeterHandler(srv GreeterHandler, opts ...http1.HandleOption) http.Hand
 			h.Error(w, r, err)
 			return
 		}
-		if err := h.Encode(w, r, out); err != nil {
+		reply := out.(*HelloReply)
+		if err := h.Encode(w, r, reply); err != nil {
 			h.Error(w, r, err)
 		}
 	}).Methods("GET")
 
 	return r
+}
+
+type GreeterHTTPClient interface {
+	SayHello(ctx context.Context, req *HelloRequest, opts ...http1.CallOption) (rsp *HelloReply, err error)
+}
+
+type GreeterHTTPClientImpl struct {
+	cc *http1.Client
+}
+
+func NewGreeterHTTPClient(client *http1.Client) GreeterHTTPClient {
+	return &GreeterHTTPClientImpl{client}
+}
+
+func (c *GreeterHTTPClientImpl) SayHello(ctx context.Context, in *HelloRequest, opts ...http1.CallOption) (out *HelloReply, err error) {
+	path := binding.EncodePath("GET", "/helloworld/{name}", in)
+	out = &HelloReply{}
+
+	err = c.cc.Invoke(ctx, path, nil, &out, http1.Method("GET"), http1.PathPattern("/helloworld/{name}"))
+
+	if err != nil {
+		return
+	}
+	return
 }

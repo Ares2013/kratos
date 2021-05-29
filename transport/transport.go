@@ -6,13 +6,19 @@ import (
 	// init encoding
 	_ "github.com/go-kratos/kratos/v2/encoding/json"
 	_ "github.com/go-kratos/kratos/v2/encoding/proto"
+	_ "github.com/go-kratos/kratos/v2/encoding/xml"
+	_ "github.com/go-kratos/kratos/v2/encoding/yaml"
 )
 
 // Server is transport server.
 type Server interface {
-	Endpoint() (string, error)
 	Start() error
 	Stop() error
+}
+
+// Endpointer is registry endpoint.
+type Endpointer interface {
+	Endpoint() (string, error)
 }
 
 // Transport is transport context value.

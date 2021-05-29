@@ -4,21 +4,23 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
+	"github.com/go-kratos/kratos/v2/api/metadata"
 	"github.com/go-kratos/kratos/v2/internal/host"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
-	"github.com/go-kratos/kratos/v2/middleware/status"
 	"github.com/go-kratos/kratos/v2/transport"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
-const loggerName = "transport/grpc"
-
 var _ transport.Server = (*Server)(nil)
+var _ transport.Endpointer = (*Server)(nil)
 
 // ServerOption is gRPC server option.
 type ServerOption func(o *Server)
@@ -47,14 +49,14 @@ func Timeout(timeout time.Duration) ServerOption {
 // Logger with server logger.
 func Logger(logger log.Logger) ServerOption {
 	return func(s *Server) {
-		s.log = log.NewHelper(loggerName, logger)
+		s.log = log.NewHelper(logger)
 	}
 }
 
 // Middleware with server middleware.
-func Middleware(m middleware.Middleware) ServerOption {
+func Middleware(m ...middleware.Middleware) ServerOption {
 	return func(s *Server) {
-		s.middleware = m
+		s.middleware = middleware.Chain(m...)
 	}
 }
 
@@ -75,6 +77,8 @@ type Server struct {
 	log        *log.Helper
 	middleware middleware.Middleware
 	grpcOpts   []grpc.ServerOption
+	health     *health.Server
+	metadata   *metadata.Server
 }
 
 // NewServer creates a gRPC server by options.
@@ -83,11 +87,11 @@ func NewServer(opts ...ServerOption) *Server {
 		network: "tcp",
 		address: ":0",
 		timeout: time.Second,
-		log:     log.NewHelper(loggerName, log.DefaultLogger),
 		middleware: middleware.Chain(
 			recovery.Recovery(),
-			status.Server(),
 		),
+		health: health.NewServer(),
+		log:    log.NewHelper(log.DefaultLogger),
 	}
 	for _, o := range opts {
 		o(srv)
@@ -101,6 +105,11 @@ func NewServer(opts ...ServerOption) *Server {
 		grpcOpts = append(grpcOpts, srv.grpcOpts...)
 	}
 	srv.Server = grpc.NewServer(grpcOpts...)
+	srv.metadata = metadata.NewServer(srv.Server)
+	// internal register
+	grpc_health_v1.RegisterHealthServer(srv.Server, srv.health)
+	metadata.RegisterMetadataServer(srv.Server, srv.metadata)
+	reflection.Register(srv.Server)
 	return srv
 }
 
@@ -108,6 +117,13 @@ func NewServer(opts ...ServerOption) *Server {
 // examples:
 //   grpc://127.0.0.1:9000?isSecure=false
 func (s *Server) Endpoint() (string, error) {
+	if s.lis == nil && strings.HasSuffix(s.address, ":0") {
+		lis, err := net.Listen(s.network, s.address)
+		if err != nil {
+			return "", err
+		}
+		s.lis = lis
+	}
 	addr, err := host.Extract(s.address, s.lis)
 	if err != nil {
 		return "", err
@@ -117,18 +133,22 @@ func (s *Server) Endpoint() (string, error) {
 
 // Start start the gRPC server.
 func (s *Server) Start() error {
-	lis, err := net.Listen(s.network, s.address)
-	if err != nil {
-		return err
+	if s.lis == nil {
+		lis, err := net.Listen(s.network, s.address)
+		if err != nil {
+			return err
+		}
+		s.lis = lis
 	}
-	s.lis = lis
-	s.log.Infof("[gRPC] server listening on: %s", lis.Addr().String())
-	return s.Serve(lis)
+	s.log.Infof("[gRPC] server listening on: %s", s.lis.Addr().String())
+	s.health.Resume()
+	return s.Serve(s.lis)
 }
 
 // Stop stop the gRPC server.
 func (s *Server) Stop() error {
 	s.GracefulStop()
+	s.health.Shutdown()
 	s.log.Info("[gRPC] server stopping")
 	return nil
 }

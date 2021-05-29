@@ -6,10 +6,12 @@ import (
 
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
-	"github.com/go-kratos/kratos/v2/middleware/status"
 	"github.com/go-kratos/kratos/v2/registry"
 	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-kratos/kratos/v2/transport/grpc/resolver/discovery"
+
+	// init resolver
+	_ "github.com/go-kratos/kratos/v2/transport/grpc/resolver/direct"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
@@ -33,9 +35,9 @@ func WithTimeout(timeout time.Duration) ClientOption {
 }
 
 // WithMiddleware with client middleware.
-func WithMiddleware(m middleware.Middleware) ClientOption {
+func WithMiddleware(m ...middleware.Middleware) ClientOption {
 	return func(o *clientOptions) {
-		o.middleware = m
+		o.middleware = middleware.Chain(m...)
 	}
 }
 
@@ -77,7 +79,6 @@ func dial(ctx context.Context, insecure bool, opts ...ClientOption) (*grpc.Clien
 		timeout: 500 * time.Millisecond,
 		middleware: middleware.Chain(
 			recovery.Recovery(),
-			status.Client(),
 		),
 	}
 	for _, o := range opts {

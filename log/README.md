@@ -4,14 +4,21 @@
 
 ### Structured logging
 
-```
-logger := log.NewLogger(os.Stdout)
-logger = With(logger, "key", "value")
+```go
+Logger logger = log.MultiLogger(log.NewStdLogger(os.Stdout), syslog.NewLogger())
 
-log := log.NewHelper("github.com/project/foo", logger)
-// Levels
-log.Info("hello")
-log.Infof("hello %s", "kratos")
-log.Infow("key", "value")
-```
+logger = log.With(logger,
+    "service.name", "hellworld",
+    "service.version", "v1.0.0",
+    "ts", log.DefaultTimestamp,
+    "caller", log.DefaultCaller,
+)
 
+logger.Log(log.LevelInfo, "key", "value")
+
+Helper helper = log.NewHelper(logger)
+helper.Log(log.LevelInfo, "key", "value")
+helper.Info("info message")
+helper.Infof("info %s", "message")
+helper.Infow("key", "value")
+```
