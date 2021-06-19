@@ -3,181 +3,98 @@ package logging
 import (
 	"context"
 	"fmt"
-
-	"go.opentelemetry.io/otel/trace"
+	"time"
 
 	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/middleware"
-	"github.com/go-kratos/kratos/v2/transport/grpc"
-	"github.com/go-kratos/kratos/v2/transport/http"
+	"github.com/go-kratos/kratos/v2/transport"
 )
 
 // Server is an server logging middleware.
-func Server(l log.Logger) middleware.Middleware {
-	logger := log.NewHelper(l)
+func Server(logger log.Logger) middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (interface{}, error) {
+		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
 			var (
-				path      string
-				method    string
-				args      string
-				component string
-				query     string
-				traceID   string
+				code      int32
+				reason    string
+				kind      string
+				operation string
 			)
-			if tid := trace.SpanContextFromContext(ctx).TraceID(); tid.IsValid() {
-				traceID = tid.String()
+			startTime := time.Now()
+			if info, ok := transport.FromServerContext(ctx); ok {
+				kind = info.Kind().String()
+				operation = info.Operation()
 			}
-			if stringer, ok := req.(fmt.Stringer); ok {
-				args = stringer.String()
-			} else {
-				args = fmt.Sprintf("%+v", req)
+			reply, err = handler(ctx, req)
+			if se := errors.FromError(err); se != nil {
+				code = se.Code
+				reason = se.Reason
 			}
-			if info, ok := http.FromServerContext(ctx); ok {
-				component = "HTTP"
-				path = info.Request.URL.Path
-				method = info.Request.Method
-				query = info.Request.URL.RawQuery
-			} else if info, ok := grpc.FromServerContext(ctx); ok {
-				component = "gRPC"
-				path = info.FullMethod
-				method = "POST"
-			}
-			reply, err := handler(ctx, req)
-			if component == "HTTP" {
-				if err != nil {
-					logger.Errorw(
-						"kind", "server",
-						"component", component,
-						"traceID", traceID,
-						"path", path,
-						"method", method,
-						"args", args,
-						"query", query,
-						"code", uint32(errors.Code(err)),
-						"error", err.Error(),
-					)
-					return nil, err
-				}
-				logger.Infow(
-					"kind", "server",
-					"component", component,
-					"traceID", traceID,
-					"path", path,
-					"method", method,
-					"args", args,
-					"query", query,
-					"code", 0,
-				)
-			} else {
-				if err != nil {
-					logger.Errorw(
-						"kind", "server",
-						"component", component,
-						"traceID", traceID,
-						"path", path,
-						"method", method,
-						"args", args,
-						"code", uint32(errors.Code(err)),
-						"error", err.Error(),
-					)
-					return nil, err
-				}
-				logger.Infow(
-					"kind", "server",
-					"component", component,
-					"traceID", traceID,
-					"path", path,
-					"method", method,
-					"args", args,
-					"code", 0,
-				)
-			}
-			return reply, nil
+			level, stack := extractError(err)
+			log.WithContext(ctx, logger).Log(level,
+				"kind", "server",
+				"component", kind,
+				"operation", operation,
+				"args", extractArgs(req),
+				"code", code,
+				"reason", reason,
+				"stack", stack,
+				"latency", time.Since(startTime).Seconds(),
+			)
+			return
 		}
 	}
 }
 
 // Client is an client logging middleware.
-func Client(l log.Logger) middleware.Middleware {
-	logger := log.NewHelper(l)
+func Client(logger log.Logger) middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (interface{}, error) {
+		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
 			var (
-				path      string
-				method    string
-				args      string
-				component string
-				query     string
-				traceID   string
+				code      int32
+				reason    string
+				kind      string
+				operation string
 			)
-			if tid := trace.SpanContextFromContext(ctx).TraceID(); tid.IsValid() {
-				traceID = tid.String()
+			startTime := time.Now()
+			if info, ok := transport.FromClientContext(ctx); ok {
+				kind = info.Kind().String()
+				operation = info.Operation()
 			}
-			if info, ok := http.FromClientContext(ctx); ok {
-				component = "HTTP"
-				path = info.Request.URL.Path
-				method = info.Request.Method
-				args = req.(fmt.Stringer).String()
-				query = info.Request.URL.RawQuery
-			} else if info, ok := grpc.FromClientContext(ctx); ok {
-				path = info.FullMethod
-				method = "POST"
-				component = "gRPC"
-				args = req.(fmt.Stringer).String()
+			reply, err = handler(ctx, req)
+			if se := errors.FromError(err); se != nil {
+				code = se.Code
+				reason = se.Reason
 			}
-			reply, err := handler(ctx, req)
-			if component == "HTTP" {
-				if err != nil {
-					logger.Errorw(
-						"kind", "client",
-						"component", component,
-						"traceID", traceID,
-						"path", path,
-						"method", method,
-						"args", args,
-						"query", query,
-						"code", uint32(errors.Code(err)),
-						"error", err.Error(),
-					)
-					return nil, err
-				}
-				logger.Infow(
-					"kind", "client",
-					"component", component,
-					"traceID", traceID,
-					"path", path,
-					"method", method,
-					"args", args,
-					"query", query,
-					"code", 0,
-				)
-			} else {
-				if err != nil {
-					logger.Errorw(
-						"kind", "client",
-						"component", component,
-						"traceID", traceID,
-						"path", path,
-						"method", method,
-						"args", args,
-						"code", uint32(errors.Code(err)),
-						"error", err.Error(),
-					)
-					return nil, err
-				}
-				logger.Infow(
-					"kind", "client",
-					"component", component,
-					"traceID", traceID,
-					"path", path,
-					"method", method,
-					"args", args,
-					"code", 0,
-				)
-			}
-			return reply, nil
+			level, stack := extractError(err)
+			log.WithContext(ctx, logger).Log(level,
+				"kind", "client",
+				"component", kind,
+				"operation", operation,
+				"args", extractArgs(req),
+				"code", code,
+				"reason", reason,
+				"stack", stack,
+				"latency", time.Since(startTime).Seconds(),
+			)
+			return
 		}
 	}
+}
+
+// extractArgs returns the string of the req
+func extractArgs(req interface{}) string {
+	if stringer, ok := req.(fmt.Stringer); ok {
+		return stringer.String()
+	}
+	return fmt.Sprintf("%+v", req)
+}
+
+// extractError returns the string of the error
+func extractError(err error) (log.Level, string) {
+	if err != nil {
+		return log.LevelError, fmt.Sprintf("%+v", err)
+	}
+	return log.LevelInfo, ""
 }

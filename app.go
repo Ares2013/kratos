@@ -49,27 +49,29 @@ func New(opts ...Option) *App {
 
 // Run executes all OnStart hooks registered with the application's Lifecycle.
 func (a *App) Run() error {
-	a.log.Infow(
-		"service_id", a.opts.id,
-		"service_name", a.opts.name,
-		"version", a.opts.version,
-	)
-	instance, err := buildInstance(a.opts)
+	instance, err := a.buildInstance()
 	if err != nil {
 		return err
 	}
-	eg, ctx := errgroup.WithContext(a.ctx)
+	ctx := NewContext(a.ctx, AppInfo{
+		ID:        instance.ID,
+		Name:      instance.Name,
+		Version:   instance.Version,
+		Metadata:  instance.Metadata,
+		Endpoints: instance.Endpoints,
+	})
+	eg, ctx := errgroup.WithContext(ctx)
 	wg := sync.WaitGroup{}
 	for _, srv := range a.opts.servers {
 		srv := srv
 		eg.Go(func() error {
 			<-ctx.Done() // wait for stop signal
-			return srv.Stop()
+			return srv.Stop(ctx)
 		})
 		wg.Add(1)
 		eg.Go(func() error {
 			wg.Done()
-			return srv.Start()
+			return srv.Start(ctx)
 		})
 	}
 	wg.Wait()
@@ -110,23 +112,28 @@ func (a *App) Stop() error {
 	return nil
 }
 
-func buildInstance(o options) (*registry.ServiceInstance, error) {
-	if len(o.endpoints) == 0 {
-		for _, srv := range o.servers {
+func (a *App) buildInstance() (*registry.ServiceInstance, error) {
+	var endpoints []string
+	for _, e := range a.opts.endpoints {
+		endpoints = append(endpoints, e.String())
+	}
+	if len(endpoints) == 0 {
+		for _, srv := range a.opts.servers {
 			if r, ok := srv.(transport.Endpointer); ok {
 				e, err := r.Endpoint()
 				if err != nil {
 					return nil, err
 				}
-				o.endpoints = append(o.endpoints, e)
+				endpoints = append(endpoints, e.String())
 			}
 		}
 	}
+
 	return &registry.ServiceInstance{
-		ID:        o.id,
-		Name:      o.name,
-		Version:   o.version,
-		Metadata:  o.metadata,
-		Endpoints: o.endpoints,
+		ID:        a.opts.id,
+		Name:      a.opts.name,
+		Version:   a.opts.version,
+		Metadata:  a.opts.metadata,
+		Endpoints: endpoints,
 	}, nil
 }

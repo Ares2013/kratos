@@ -2,38 +2,40 @@ package grpc
 
 import (
 	"context"
-	"fmt"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-kratos/kratos/v2/internal/host"
 )
 
+type testKey struct{}
+
 func TestServer(t *testing.T) {
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, testKey{}, "test")
 	srv := NewServer()
-	if e, err := srv.Endpoint(); err != nil || e == "" {
+
+	if e, err := srv.Endpoint(); err != nil || e == nil || strings.HasSuffix(e.Host, ":0") {
 		t.Fatal(e, err)
 	}
 
 	go func() {
 		// start server
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(ctx); err != nil {
 			panic(err)
 		}
 	}()
 	time.Sleep(time.Second)
 	testClient(t, srv)
-	srv.Stop()
+	srv.Stop(ctx)
 }
 
 func testClient(t *testing.T, srv *Server) {
-	port, ok := host.Port(srv.lis)
-	if !ok {
-		t.Fatalf("extract port error: %v", srv.lis)
+	u, err := srv.Endpoint()
+	if err != nil {
+		t.Fatal(err)
 	}
-	endpoint := fmt.Sprintf("127.0.0.1:%d", port)
 	// new a gRPC client
-	conn, err := DialInsecure(context.Background(), WithEndpoint(endpoint))
+	conn, err := DialInsecure(context.Background(), WithEndpoint(u.Host))
 	if err != nil {
 		t.Fatal(err)
 	}

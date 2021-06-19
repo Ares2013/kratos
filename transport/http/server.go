@@ -3,14 +3,16 @@ package http
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
-	"strings"
+	"net/url"
+	"sync"
 	"time"
 
+	ic "github.com/go-kratos/kratos/v2/internal/context"
 	"github.com/go-kratos/kratos/v2/internal/host"
 	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/transport"
 
 	"github.com/gorilla/mux"
@@ -50,15 +52,59 @@ func Logger(logger log.Logger) ServerOption {
 	}
 }
 
+// Middleware with service middleware option.
+func Middleware(m ...middleware.Middleware) ServerOption {
+	return func(o *Server) {
+		o.ms = m
+	}
+}
+
+// Filter with HTTP middleware option.
+func Filter(filters ...FilterFunc) ServerOption {
+	return func(o *Server) {
+		o.filters = filters
+	}
+}
+
+// RequestDecoder with request decoder.
+func RequestDecoder(dec DecodeRequestFunc) ServerOption {
+	return func(o *Server) {
+		o.dec = dec
+	}
+}
+
+// ResponseEncoder with response encoder.
+func ResponseEncoder(en EncodeResponseFunc) ServerOption {
+	return func(o *Server) {
+		o.enc = en
+	}
+}
+
+// ErrorEncoder with error encoder.
+func ErrorEncoder(en EncodeErrorFunc) ServerOption {
+	return func(o *Server) {
+		o.ene = en
+	}
+}
+
 // Server is an HTTP server wrapper.
 type Server struct {
 	*http.Server
-	lis     net.Listener
-	network string
-	address string
-	timeout time.Duration
-	router  *mux.Router
-	log     *log.Helper
+	ctx      context.Context
+	lis      net.Listener
+	once     sync.Once
+	endpoint *url.URL
+	err      error
+	network  string
+	address  string
+	timeout  time.Duration
+	filters  []FilterFunc
+	ms       []middleware.Middleware
+	dec      DecodeRequestFunc
+	enc      EncodeResponseFunc
+	ene      EncodeErrorFunc
+	router   *mux.Router
+	log      *log.Helper
 }
 
 // NewServer creates an HTTP server by options.
@@ -66,15 +112,26 @@ func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
 		network: "tcp",
 		address: ":0",
-		timeout: time.Second,
+		timeout: 1 * time.Second,
+		dec:     DefaultRequestDecoder,
+		enc:     DefaultResponseEncoder,
+		ene:     DefaultErrorEncoder,
 		log:     log.NewHelper(log.DefaultLogger),
 	}
 	for _, o := range opts {
 		o(srv)
 	}
+	srv.Server = &http.Server{
+		Handler: FilterChain(srv.filters...)(srv),
+	}
 	srv.router = mux.NewRouter()
-	srv.Server = &http.Server{Handler: srv}
+	srv.router.Use(srv.filter())
 	return srv
+}
+
+// Route registers an HTTP route.
+func (s *Server) Route(prefix string, filters ...FilterFunc) *Route {
+	return newRoute(prefix, s, filters...)
 }
 
 // Handle registers a new route with a matcher for the URL path.
@@ -94,40 +151,72 @@ func (s *Server) HandleFunc(path string, h http.HandlerFunc) {
 
 // ServeHTTP should write reply headers and data to the ResponseWriter and then return.
 func (s *Server) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-	ctx, cancel := context.WithTimeout(req.Context(), s.timeout)
-	defer cancel()
-	ctx = transport.NewContext(ctx, transport.Transport{Kind: transport.KindHTTP})
-	ctx = NewServerContext(ctx, ServerInfo{Request: req, Response: res})
-	s.router.ServeHTTP(res, req.WithContext(ctx))
+	s.router.ServeHTTP(res, req)
+}
+
+func (s *Server) filter() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx, cancel := ic.Merge(req.Context(), s.ctx)
+			defer cancel()
+			if s.timeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, s.timeout)
+				defer cancel()
+			}
+			pathTemplate := req.URL.Path
+			if route := mux.CurrentRoute(req); route != nil {
+				// /path/123 -> /path/{id}
+				pathTemplate, _ = route.GetPathTemplate()
+			}
+			tr := &Transport{
+				endpoint:     s.endpoint.String(),
+				operation:    pathTemplate,
+				header:       headerCarrier(req.Header),
+				request:      req,
+				pathTemplate: pathTemplate,
+			}
+			if r := mux.CurrentRoute(req); r != nil {
+				if path, err := r.GetPathTemplate(); err == nil {
+					tr.operation = path
+				}
+			}
+			ctx = transport.NewServerContext(ctx, tr)
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	}
 }
 
 // Endpoint return a real address to registry endpoint.
 // examples:
 //   http://127.0.0.1:8000?isSecure=false
-func (s *Server) Endpoint() (string, error) {
-	if s.lis == nil && strings.HasSuffix(s.address, ":0") {
+func (s *Server) Endpoint() (*url.URL, error) {
+	s.once.Do(func() {
 		lis, err := net.Listen(s.network, s.address)
 		if err != nil {
-			return "", err
+			s.err = err
+			return
+		}
+		addr, err := host.Extract(s.address, lis)
+		if err != nil {
+			lis.Close()
+			s.err = err
+			return
 		}
 		s.lis = lis
+		s.endpoint = &url.URL{Scheme: "http", Host: addr}
+	})
+	if s.err != nil {
+		return nil, s.err
 	}
-	addr, err := host.Extract(s.address, s.lis)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("http://%s", addr), nil
+	return s.endpoint, nil
 }
 
 // Start start the HTTP server.
-func (s *Server) Start() error {
-	if s.lis == nil {
-		lis, err := net.Listen(s.network, s.address)
-		if err != nil {
-			return err
-		}
-		s.lis = lis
+func (s *Server) Start(ctx context.Context) error {
+	if _, err := s.Endpoint(); err != nil {
+		return err
 	}
+	s.ctx = ctx
 	s.log.Infof("[HTTP] server listening on: %s", s.lis.Addr().String())
 	if err := s.Serve(s.lis); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -136,7 +225,7 @@ func (s *Server) Start() error {
 }
 
 // Stop stop the HTTP server.
-func (s *Server) Stop() error {
+func (s *Server) Stop(ctx context.Context) error {
 	s.log.Info("[HTTP] server stopping")
 	return s.Shutdown(context.Background())
 }

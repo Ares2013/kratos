@@ -24,10 +24,9 @@ func callHTTP() {
 			recovery.Recovery(),
 		),
 		transhttp.WithEndpoint("127.0.0.1:8000"),
-		transhttp.WithScheme("http"),
 	)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	client := pb.NewGreeterHTTPClient(conn)
 	reply, err := client.SayHello(context.Background(), &pb.HelloRequest{Name: "kratos"})
@@ -57,7 +56,7 @@ func callGRPC() {
 		),
 	)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	client := pb.NewGreeterClient(conn)
 	reply, err := client.SayHello(context.Background(), &pb.HelloRequest{Name: "kratos"})

@@ -1,10 +1,8 @@
 package yaml
 
 import (
-	"reflect"
-
 	"github.com/go-kratos/kratos/v2/encoding"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 // Name is the name registered for the json codec.
@@ -22,13 +20,6 @@ func (codec) Marshal(v interface{}) ([]byte, error) {
 }
 
 func (codec) Unmarshal(data []byte, v interface{}) error {
-	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Ptr {
-		if rv.IsNil() {
-			rv.Set(reflect.New(rv.Type().Elem()))
-		}
-		rv = rv.Elem()
-	}
 	return yaml.Unmarshal(data, v)
 }
 

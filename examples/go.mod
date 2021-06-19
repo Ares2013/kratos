@@ -16,12 +16,13 @@ require (
 	github.com/go-kratos/etcd v0.1.0
 	github.com/go-kratos/kratos/v2 v2.0.0-rc1
 	github.com/go-kratos/nacos v0.1.0
+	github.com/go-kratos/prometheus v0.0.0-20210522055322-137e29e7cf47
 	github.com/go-playground/validator/v10 v10.6.1 // indirect
 	github.com/go-redis/redis/extra/redisotel v0.3.0
 	github.com/go-redis/redis/v8 v8.9.0
 	github.com/go-sql-driver/mysql v1.6.0
-	github.com/golang/protobuf v1.5.2
 	github.com/google/wire v0.5.0
+	github.com/gorilla/handlers v1.5.1 // indirect
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.4.2
 	github.com/hashicorp/consul/api v1.8.1
@@ -33,6 +34,7 @@ require (
 	github.com/leodido/go-urn v1.2.1 // indirect
 	github.com/mattn/go-isatty v0.0.13 // indirect
 	github.com/nacos-group/nacos-sdk-go v1.0.7
+	github.com/prometheus/client_golang v1.9.0
 	github.com/ugorji/go v1.2.6 // indirect
 	go.etcd.io/etcd/client/v3 v3.5.0-beta.4
 	go.opentelemetry.io/otel v0.20.0
@@ -40,14 +42,13 @@ require (
 	go.opentelemetry.io/otel/sdk v0.20.0
 	go.opentelemetry.io/otel/trace v0.20.0
 	go.uber.org/multierr v1.7.0 // indirect
-	go.uber.org/zap v1.17.0 // indirect
+	go.uber.org/zap v1.17.0
 	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a // indirect
 	google.golang.org/genproto v0.0.0-20210524171403-669157292da3
 	google.golang.org/grpc v1.38.0
 	google.golang.org/protobuf v1.26.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.62.0 // indirect
-	gopkg.in/yaml.v2 v2.4.0
 )
 
 replace github.com/go-kratos/kratos/v2 => ../

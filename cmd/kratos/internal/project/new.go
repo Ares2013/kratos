@@ -3,12 +3,13 @@ package project
 import (
 	"context"
 	"fmt"
-	"github.com/fatih/color"
 	"os"
 	"path"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/go-kratos/kratos/cmd/kratos/v2/internal/base"
+
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/fatih/color"
 )
 
 // Project is a project template.
@@ -17,14 +18,15 @@ type Project struct {
 }
 
 // New new a project from remote repo.
-func (p *Project) New(ctx context.Context, dir string, layout string) error {
+func (p *Project) New(ctx context.Context, dir string, layout string, branch string) error {
+
 	to := path.Join(dir, p.Name)
 	if _, err := os.Stat(to); !os.IsNotExist(err) {
 		fmt.Printf("🚫 %s already exists\n", p.Name)
 		override := false
 		prompt := &survey.Confirm{
 			Message: "📂 Do you want to override the folder ?",
-			Help: "Delete the existing folder and create the project.",
+			Help:    "Delete the existing folder and create the project.",
 		}
 		survey.AskOne(prompt, &override)
 		if !override {
@@ -33,7 +35,7 @@ func (p *Project) New(ctx context.Context, dir string, layout string) error {
 		os.RemoveAll(to)
 	}
 	fmt.Printf("🚀 Creating service %s, layout repo is %s, please wait a moment.\n\n", p.Name, layout)
-	repo := base.NewRepo(layout)
+	repo := base.NewRepo(layout, branch)
 	if err := repo.CopyTo(ctx, to, p.Name, []string{".git", ".github"}); err != nil {
 		return err
 	}

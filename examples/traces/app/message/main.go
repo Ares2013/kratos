@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
-	pb "github.com/go-kratos/kratos/examples/traces/api/message"
+	"os"
+
+	v1 "github.com/go-kratos/kratos/examples/traces/api/message"
 	"github.com/go-kratos/kratos/v2"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/middleware"
@@ -17,7 +19,6 @@ import (
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv"
 	"go.opentelemetry.io/otel/trace"
-	"os"
 )
 
 // go build -ldflags "-X main.Version=x.y.z"
@@ -30,7 +31,7 @@ var (
 
 // server is used to implement helloworld.GreeterServer.
 type server struct {
-	pb.UnimplementedMessageServiceServer
+	v1.UnimplementedMessageServiceServer
 	tracer trace.TracerProvider
 }
 
@@ -47,7 +48,7 @@ func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
 		tracesdk.WithBatcher(exp),
 		// Record information about this application in an Resource.
 		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.ServiceNameKey.String(pb.MessageService_ServiceDesc.ServiceName),
+			semconv.ServiceNameKey.String(v1.MessageService_ServiceDesc.ServiceName),
 			attribute.String("environment", "development"),
 			attribute.Int64("ID", 1),
 		)),
@@ -55,17 +56,18 @@ func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
 	return tp, nil
 }
 
-func (s *server) GetUserMessage(ctx context.Context, request *pb.GetUserMessageRequest) (*pb.GetUserMessageReply, error) {
-	msgs := &pb.GetUserMessageReply{}
+func (s *server) GetUserMessage(ctx context.Context, request *v1.GetUserMessageRequest) (*v1.GetUserMessageReply, error) {
+	msgs := &v1.GetUserMessageReply{}
 	for i := 0; i < int(request.Count); i++ {
-		msgs.Messages = append(msgs.Messages,&pb.Message{Content: "Teletubbies say hello."})
+		msgs.Messages = append(msgs.Messages, &v1.Message{Content: "Teletubbies say hello."})
 	}
 	return msgs, nil
 }
 
 func main() {
 	logger := log.NewStdLogger(os.Stdout)
-
+	logger = log.With(logger, "trace_id", log.TraceID())
+	logger = log.With(logger, "span_id", log.SpanID())
 	log := log.NewHelper(logger)
 
 	tp, err := tracerProvider("http://jaeger:14268/api/traces")
@@ -90,7 +92,7 @@ func main() {
 				logging.Server(logger),
 			),
 		))
-	pb.RegisterMessageServiceServer(grpcSrv, s)
+	v1.RegisterMessageServiceServer(grpcSrv, s)
 
 	app := kratos.New(
 		kratos.Name(Name),

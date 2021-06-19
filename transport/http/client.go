@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/encoding"
@@ -20,33 +19,32 @@ import (
 	"github.com/go-kratos/kratos/v2/transport/http/balancer/random"
 )
 
-// Client is an HTTP client.
-type Client struct {
-	cc *http.Client
-	r  *resolver
-	b  balancer.Balancer
-
-	scheme       string
-	target       Target
-	userAgent    string
-	middleware   middleware.Middleware
-	encoder      EncodeRequestFunc
-	decoder      DecodeResponseFunc
-	errorDecoder DecodeErrorFunc
-	discovery    registry.Discovery
-}
-
 // DecodeErrorFunc is decode error func.
 type DecodeErrorFunc func(ctx context.Context, res *http.Response) error
 
 // EncodeRequestFunc is request encode func.
-type EncodeRequestFunc func(ctx context.Context, in interface{}) (contentType string, body []byte, err error)
+type EncodeRequestFunc func(ctx context.Context, contentType string, in interface{}) (body []byte, err error)
 
 // DecodeResponseFunc is response decode func.
 type DecodeResponseFunc func(ctx context.Context, res *http.Response, out interface{}) error
 
 // ClientOption is HTTP client option.
 type ClientOption func(*clientOptions)
+
+// Client is an HTTP transport client.
+type clientOptions struct {
+	ctx          context.Context
+	timeout      time.Duration
+	endpoint     string
+	userAgent    string
+	encoder      EncodeRequestFunc
+	decoder      DecodeResponseFunc
+	errorDecoder DecodeErrorFunc
+	transport    http.RoundTripper
+	balancer     balancer.Balancer
+	discovery    registry.Discovery
+	middleware   []middleware.Middleware
+}
 
 // WithTransport with client transport.
 func WithTransport(trans http.RoundTripper) ClientOption {
@@ -72,14 +70,7 @@ func WithUserAgent(ua string) ClientOption {
 // WithMiddleware with client middleware.
 func WithMiddleware(m ...middleware.Middleware) ClientOption {
 	return func(o *clientOptions) {
-		o.middleware = middleware.Chain(m...)
-	}
-}
-
-// WithScheme with client schema.
-func WithScheme(scheme string) ClientOption {
-	return func(o *clientOptions) {
-		o.scheme = scheme
+		o.middleware = m
 	}
 }
 
@@ -127,28 +118,19 @@ func WithBalancer(b balancer.Balancer) ClientOption {
 	}
 }
 
-// Client is an HTTP transport client.
-type clientOptions struct {
-	ctx          context.Context
-	transport    http.RoundTripper
-	middleware   middleware.Middleware
-	timeout      time.Duration
-	scheme       string
-	endpoint     string
-	userAgent    string
-	encoder      EncodeRequestFunc
-	decoder      DecodeResponseFunc
-	errorDecoder DecodeErrorFunc
-	discovery    registry.Discovery
-	balancer     balancer.Balancer
+// Client is an HTTP client.
+type Client struct {
+	opts   clientOptions
+	target *Target
+	r      *resolver
+	cc     *http.Client
 }
 
 // NewClient returns an HTTP client.
 func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
-	options := &clientOptions{
+	options := clientOptions{
 		ctx:          ctx,
-		scheme:       "http",
-		timeout:      1 * time.Second,
+		timeout:      500 * time.Millisecond,
 		encoder:      DefaultRequestEncoder,
 		decoder:      DefaultResponseDecoder,
 		errorDecoder: DefaultErrorDecoder,
@@ -156,94 +138,71 @@ func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
 		balancer:     random.New(),
 	}
 	for _, o := range opts {
-		o(options)
+		o(&options)
 	}
-	target := Target{
-		Scheme:   options.scheme,
-		Endpoint: options.endpoint,
+	target, err := parseTarget(options.endpoint)
+	if err != nil {
+		return nil, err
 	}
 	var r *resolver
-	if options.endpoint != "" && options.discovery != nil {
-		u, err := url.Parse(options.endpoint)
-		if err != nil {
-			u, err = url.Parse("http://" + options.endpoint)
-			if err != nil {
-				return nil, fmt.Errorf("[http client] invalid endpoint format: %v", options.endpoint)
-			}
-		}
-		if u.Scheme == "discovery" && len(u.Path) > 1 {
-			target = Target{
-				Scheme:    u.Scheme,
-				Authority: u.Host,
-				Endpoint:  u.Path[1:],
-			}
-			r, err = newResolver(ctx, options.scheme, options.discovery, target)
-			if err != nil {
+	if options.discovery != nil {
+		if target.Scheme == "discovery" {
+			if r, err = newResolver(ctx, options.discovery, target); err != nil {
 				return nil, fmt.Errorf("[http client] new resolver failed!err: %v", options.endpoint)
 			}
 		} else {
 			return nil, fmt.Errorf("[http client] invalid endpoint format: %v", options.endpoint)
 		}
 	}
-
 	return &Client{
-		cc:           &http.Client{Timeout: options.timeout, Transport: options.transport},
-		r:            r,
-		encoder:      options.encoder,
-		decoder:      options.decoder,
-		errorDecoder: options.errorDecoder,
-		middleware:   options.middleware,
-		userAgent:    options.userAgent,
-		target:       target,
-		scheme:       options.scheme,
-		discovery:    options.discovery,
-		b:            options.balancer,
+		opts:   options,
+		target: target,
+		r:      r,
+		cc: &http.Client{
+			Timeout:   options.timeout,
+			Transport: options.transport,
+		},
 	}, nil
 }
 
 // Invoke makes an rpc call procedure for remote service.
-func (client *Client) Invoke(ctx context.Context, path string, args interface{}, reply interface{}, opts ...CallOption) error {
+func (client *Client) Invoke(ctx context.Context, method, path string, args interface{}, reply interface{}, opts ...CallOption) error {
 	var (
-		reqBody     io.Reader
 		contentType string
+		body        io.Reader
 	)
-
-	c := defaultCallInfo()
+	c := defaultCallInfo(path)
 	for _, o := range opts {
 		if err := o.before(&c); err != nil {
 			return err
 		}
 	}
-
 	if args != nil {
-		var (
-			body []byte
-			err  error
-		)
-		contentType, body, err = client.encoder(ctx, args)
+		data, err := client.opts.encoder(ctx, c.contentType, args)
 		if err != nil {
 			return err
 		}
-		reqBody = bytes.NewReader(body)
+		contentType = c.contentType
+		body = bytes.NewReader(data)
 	}
-	url := fmt.Sprintf("%s://%s%s", client.scheme, client.target.Endpoint, path)
-	req, err := http.NewRequest(c.method, url, reqBody)
+	url := fmt.Sprintf("%s://%s%s", client.target.Scheme, client.target.Authority, path)
+	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return err
 	}
 	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Content-Type", c.contentType)
 	}
-	if client.userAgent != "" {
-		req.Header.Set("User-Agent", client.userAgent)
+	if client.opts.userAgent != "" {
+		req.Header.Set("User-Agent", client.opts.userAgent)
 	}
-
-	ctx = transport.NewContext(ctx, transport.Transport{Kind: transport.KindHTTP})
-	ctx = NewClientContext(ctx, ClientInfo{
-		PathPattern: c.pathPattern,
-		Request:     req,
+	ctx = transport.NewClientContext(ctx, &Transport{
+		endpoint:     client.opts.endpoint,
+		header:       headerCarrier(req.Header),
+		operation:    c.operation,
+		request:      req,
+		pathTemplate: c.pathTemplate,
 	})
-
 	return client.invoke(ctx, req, args, reply, c)
 }
 
@@ -251,21 +210,20 @@ func (client *Client) invoke(ctx context.Context, req *http.Request, args interf
 	h := func(ctx context.Context, in interface{}) (interface{}, error) {
 		var done func(context.Context, balancer.DoneInfo)
 		if client.r != nil {
-			nodes := client.r.fetch(ctx)
-			if len(nodes) == 0 {
-				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", "fetch error")
+			var (
+				err   error
+				node  *registry.ServiceInstance
+				nodes = client.r.fetch(ctx)
+			)
+			if node, done, err = client.opts.balancer.Pick(ctx, nodes); err != nil {
+				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
 			}
-			var node *registry.ServiceInstance
-			var err error
-			node, done, err = client.b.Pick(ctx, c.pathPattern, nodes)
+			scheme, addr, err := parseEndpoint(node.Endpoints)
 			if err != nil {
 				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
 			}
 			req = req.Clone(ctx)
-			addr, err := parseEndpoint(client.scheme, node.Endpoints)
-			if err != nil {
-				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
-			}
+			req.URL.Scheme = scheme
 			req.URL.Host = addr
 		}
 		res, err := client.do(ctx, req, c)
@@ -276,13 +234,13 @@ func (client *Client) invoke(ctx context.Context, req *http.Request, args interf
 			return nil, err
 		}
 		defer res.Body.Close()
-		if err := client.decoder(ctx, res, reply); err != nil {
+		if err := client.opts.decoder(ctx, res, reply); err != nil {
 			return nil, err
 		}
 		return reply, nil
 	}
-	if client.middleware != nil {
-		h = client.middleware(h)
+	if len(client.opts.middleware) > 0 {
+		h = middleware.Chain(client.opts.middleware...)(h)
 	}
 	_, err := h(ctx, args)
 	return err
@@ -291,7 +249,7 @@ func (client *Client) invoke(ctx context.Context, req *http.Request, args interf
 // Do send an HTTP request and decodes the body of response into target.
 // returns an error (of type *Error) if the response status code is not 2xx.
 func (client *Client) Do(req *http.Request, opts ...CallOption) (*http.Response, error) {
-	c := defaultCallInfo()
+	c := defaultCallInfo(req.URL.Path)
 	for _, o := range opts {
 		if err := o.before(&c); err != nil {
 			return nil, err
@@ -305,19 +263,20 @@ func (client *Client) do(ctx context.Context, req *http.Request, c callInfo) (*h
 	if err != nil {
 		return nil, err
 	}
-	if err := client.errorDecoder(ctx, resp); err != nil {
+	if err := client.opts.errorDecoder(ctx, resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
 }
 
 // DefaultRequestEncoder is an HTTP request encoder.
-func DefaultRequestEncoder(ctx context.Context, in interface{}) (string, []byte, error) {
-	body, err := encoding.GetCodec("json").Marshal(in)
+func DefaultRequestEncoder(ctx context.Context, contentType string, in interface{}) ([]byte, error) {
+	name := httputil.ContentSubtype(contentType)
+	body, err := encoding.GetCodec(name).Marshal(in)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	return "application/json", body, err
+	return body, err
 }
 
 // DefaultResponseDecoder is an HTTP response decoder.
@@ -340,6 +299,7 @@ func DefaultErrorDecoder(ctx context.Context, res *http.Response) error {
 	if err == nil {
 		e := new(errors.Error)
 		if err = CodecForResponse(res).Unmarshal(data, e); err == nil {
+			e.Code = int32(res.StatusCode)
 			return e
 		}
 	}
@@ -348,7 +308,7 @@ func DefaultErrorDecoder(ctx context.Context, res *http.Response) error {
 
 // CodecForResponse get encoding.Codec via http.Response
 func CodecForResponse(r *http.Response) encoding.Codec {
-	codec := encoding.GetCodec(httputil.ContentSubtype("Content-Type"))
+	codec := encoding.GetCodec(httputil.ContentSubtype(r.Header.Get("Content-Type")))
 	if codec != nil {
 		return codec
 	}

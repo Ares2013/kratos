@@ -18,17 +18,17 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// EncodePath binds proto message to url path
-func EncodePath(method string, pathPattern string, msg proto.Message) string {
+// EncodeURL encode proto message to url path.
+func EncodeURL(pathTemplate string, msg proto.Message, needQuery bool) string {
 	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
-		return pathPattern
+		return pathTemplate
 	}
 	reg := regexp.MustCompile(`/{[.\w]+}`)
 	if reg == nil {
-		return pathPattern
+		return pathTemplate
 	}
 	pathParams := make(map[string]struct{}, 0)
-	path := reg.ReplaceAllStringFunc(pathPattern, func(in string) string {
+	path := reg.ReplaceAllStringFunc(pathTemplate, func(in string) string {
 		if len(in) < 4 {
 			return in
 		}
@@ -40,8 +40,8 @@ func EncodePath(method string, pathPattern string, msg proto.Message) string {
 		}
 		return in
 	})
-	if method == "GET" {
-		u, err := encodeQuery(msg)
+	if needQuery {
+		u, err := EncodeQuery(msg)
 		if err == nil && len(u) > 0 {
 			for key := range pathParams {
 				delete(u, key)
@@ -52,8 +52,20 @@ func EncodePath(method string, pathPattern string, msg proto.Message) string {
 			}
 		}
 	}
-
 	return path
+}
+
+// EncodeQuery encode proto message to url query.
+func EncodeQuery(msg proto.Message) (url.Values, error) {
+	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
+		return url.Values{}, nil
+	}
+	u := make(url.Values)
+	err := encodeByField(u, "", msg.ProtoReflect())
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 func getValueByField(v protoreflect.Message, fieldPath []string) (string, error) {
@@ -75,18 +87,6 @@ func getValueByField(v protoreflect.Message, fieldPath []string) (string, error)
 		v = v.Get(fd).Message()
 	}
 	return encodeField(fd, v.Get(fd))
-}
-
-func encodeQuery(msg proto.Message) (url.Values, error) {
-	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
-		return url.Values{}, nil
-	}
-	u := make(url.Values)
-	err := encodeByField(u, "", msg.ProtoReflect())
-	if err != nil {
-		return nil, err
-	}
-	return u, nil
 }
 
 func encodeByField(u url.Values, path string, v protoreflect.Message) error {

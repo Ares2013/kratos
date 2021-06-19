@@ -15,6 +15,8 @@ const (
 	UnknownCode = 500
 	// UnknownReason is unknown reason for error info.
 	UnknownReason = ""
+	// SupportPackageIsVersion1 this constant should not be referenced by any other code.
+	SupportPackageIsVersion1 = true
 )
 
 //go:generate protoc -I. --go_out=paths=source_relative:. errors.proto
@@ -72,11 +74,11 @@ func Errorf(code int, reason, format string, a ...interface{}) error {
 	return New(code, reason, fmt.Sprintf(format, a...))
 }
 
-// Code returns the code for a particular error.
+// Code returns the http code for a error.
 // It supports wrapped errors.
 func Code(err error) int {
 	if err == nil {
-		return 0
+		return 200
 	}
 	if se := FromError(err); err != nil {
 		return int(se.Code)

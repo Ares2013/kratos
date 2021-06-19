@@ -13,8 +13,9 @@ type CallOption interface {
 }
 
 type callInfo struct {
-	pathPattern string
-	method      string
+	contentType  string
+	operation    string
+	pathTemplate string
 }
 
 // EmptyCallOption does not alter the Call configuration.
@@ -27,40 +28,58 @@ func (EmptyCallOption) after(*callInfo, *csAttempt) {}
 
 type csAttempt struct{}
 
-// PathPattern is pathpattern
-func PathPattern(pathPattern string) CallOption {
-	return PathPatternCallOption{PathPattern: pathPattern}
+// ContentType with request content type.
+func ContentType(contentType string) CallOption {
+	return ContentTypeCallOption{ContentType: contentType}
 }
 
-// PathPatternCallOption is BodyPattern
-type PathPatternCallOption struct {
+// ContentTypeCallOption is BodyCallOption
+type ContentTypeCallOption struct {
 	EmptyCallOption
-	PathPattern string
+	ContentType string
 }
 
-func (o PathPatternCallOption) before(c *callInfo) error {
-	c.pathPattern = o.PathPattern
+func (o ContentTypeCallOption) before(c *callInfo) error {
+	c.contentType = o.ContentType
 	return nil
 }
 
-// Method is Method
-func Method(method string) CallOption {
-	return MethodCallOption{Method: method}
-}
-
-// MethodCallOption is BodyCallOption
-type MethodCallOption struct {
-	EmptyCallOption
-	Method string
-}
-
-func (o MethodCallOption) before(c *callInfo) error {
-	c.method = o.Method
-	return nil
-}
-
-func defaultCallInfo() callInfo {
+func defaultCallInfo(path string) callInfo {
 	return callInfo{
-		method: "POST",
+		contentType:  "application/json",
+		operation:    path,
+		pathTemplate: path,
 	}
+}
+
+// Operation is serviceMethod call option
+func Operation(operation string) CallOption {
+	return OperationCallOption{Operation: operation}
+}
+
+// OperationCallOption is set ServiceMethod for client call
+type OperationCallOption struct {
+	EmptyCallOption
+	Operation string
+}
+
+func (o OperationCallOption) before(c *callInfo) error {
+	c.operation = o.Operation
+	return nil
+}
+
+// PathTemplate is http path template
+func PathTemplate(pattern string) CallOption {
+	return PathTemplateCallOption{Pattern: pattern}
+}
+
+// PathTemplateCallOption is set path template for client call
+type PathTemplateCallOption struct {
+	EmptyCallOption
+	Pattern string
+}
+
+func (o PathTemplateCallOption) before(c *callInfo) error {
+	c.pathTemplate = o.Pattern
+	return nil
 }

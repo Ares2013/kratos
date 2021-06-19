@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/internal/host"
+	"github.com/stretchr/testify/assert"
 )
+
+type testKey struct{}
 
 type testData struct {
 	Path string `json:"path"`
@@ -20,22 +24,28 @@ func TestServer(t *testing.T) {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		data := &testData{Path: r.RequestURI}
 		json.NewEncoder(w).Encode(data)
+
+		if r.Context().Value(testKey{}) != "test" {
+			w.WriteHeader(500)
+		}
 	}
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, testKey{}, "test")
 	srv := NewServer()
 	srv.HandleFunc("/index", fn)
 
-	if e, err := srv.Endpoint(); err != nil || e == "" {
+	if e, err := srv.Endpoint(); err != nil || e == nil || strings.HasSuffix(e.Host, ":0") {
 		t.Fatal(e, err)
 	}
 
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(ctx); err != nil {
 			panic(err)
 		}
 	}()
 	time.Sleep(time.Second)
 	testClient(t, srv)
-	srv.Stop()
+	srv.Stop(ctx)
 }
 
 func testClient(t *testing.T, srv *Server) {
@@ -49,17 +59,17 @@ func testClient(t *testing.T, srv *Server) {
 		{"PATCH", "/index"},
 		{"DELETE", "/index"},
 	}
-	port, ok := host.Port(srv.lis)
-	if !ok {
-		t.Fatalf("extract port error: %v", srv.lis)
+	e, err := srv.Endpoint()
+	if err != nil {
+		t.Fatal(err)
 	}
-	client, err := NewClient(context.Background(), WithEndpoint(fmt.Sprintf("127.0.0.1:%d", port)))
+	client, err := NewClient(context.Background(), WithEndpoint(e.Host))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range tests {
 		var res testData
-		url := fmt.Sprintf("http://127.0.0.1:%d%s", port, test.path)
+		url := fmt.Sprintf(e.String() + test.path)
 		req, err := http.NewRequest(test.method, url, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -67,6 +77,9 @@ func testClient(t *testing.T, srv *Server) {
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if resp.StatusCode != 200 {
+			t.Fatalf("http status got %d", resp.StatusCode)
 		}
 		content, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
@@ -82,7 +95,7 @@ func testClient(t *testing.T, srv *Server) {
 	}
 	for _, test := range tests {
 		var res testData
-		err := client.Invoke(context.Background(), test.path, nil, &res, Method(test.method))
+		err := client.Invoke(context.Background(), test.method, test.path, nil, &res)
 		if err != nil {
 			t.Fatalf("invoke  error %v", err)
 		}
@@ -91,4 +104,36 @@ func testClient(t *testing.T, srv *Server) {
 		}
 	}
 
+}
+
+func BenchmarkServer(b *testing.B) {
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		data := &testData{Path: r.RequestURI}
+		json.NewEncoder(w).Encode(data)
+		if r.Context().Value(testKey{}) != "test" {
+			w.WriteHeader(500)
+		}
+	}
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, testKey{}, "test")
+	srv := NewServer()
+	srv.HandleFunc("/index", fn)
+	go func() {
+		if err := srv.Start(ctx); err != nil {
+			panic(err)
+		}
+	}()
+	time.Sleep(time.Second)
+	port, ok := host.Port(srv.lis)
+	assert.True(b, ok)
+	client, err := NewClient(context.Background(), WithEndpoint(fmt.Sprintf("127.0.0.1:%d", port)))
+	assert.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var res testData
+		err := client.Invoke(context.Background(), "POST", "/index", nil, &res)
+		assert.NoError(b, err)
+	}
+	srv.Stop(ctx)
 }
