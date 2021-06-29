@@ -14,17 +14,17 @@ type Option func(*options)
 
 type options struct {
 	TracerProvider trace.TracerProvider
-	Propagators    propagation.TextMapPropagator
+	Propagator     propagation.TextMapPropagator
 }
 
-// WithPropagators with tracer proagators.
-func WithPropagators(propagators propagation.TextMapPropagator) Option {
+// WithPropagator with tracer propagator.
+func WithPropagator(propagator propagation.TextMapPropagator) Option {
 	return func(opts *options) {
-		opts.Propagators = propagators
+		opts.Propagator = propagator
 	}
 }
 
-// WithTracerProvider with tracer privoder.
+// WithTracerProvider with tracer provider.
 func WithTracerProvider(provider trace.TracerProvider) Option {
 	return func(opts *options) {
 		opts.TracerProvider = provider

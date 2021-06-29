@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/encoding"
 	"github.com/go-kratos/kratos/v2/errors"
+	"github.com/go-kratos/kratos/v2/internal/host"
 	"github.com/go-kratos/kratos/v2/internal/httputil"
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/registry"
@@ -147,10 +148,10 @@ func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
 	var r *resolver
 	if options.discovery != nil {
 		if target.Scheme == "discovery" {
-			if r, err = newResolver(ctx, options.discovery, target); err != nil {
+			if r, err = newResolver(ctx, options.discovery, target, options.balancer); err != nil {
 				return nil, fmt.Errorf("[http client] new resolver failed!err: %v", options.endpoint)
 			}
-		} else {
+		} else if _, _, err := host.ExtractHostPort(options.endpoint); err != nil {
 			return nil, fmt.Errorf("[http client] invalid endpoint format: %v", options.endpoint)
 		}
 	}
@@ -211,11 +212,10 @@ func (client *Client) invoke(ctx context.Context, req *http.Request, args interf
 		var done func(context.Context, balancer.DoneInfo)
 		if client.r != nil {
 			var (
-				err   error
-				node  *registry.ServiceInstance
-				nodes = client.r.fetch(ctx)
+				err  error
+				node *registry.ServiceInstance
 			)
-			if node, done, err = client.opts.balancer.Pick(ctx, nodes); err != nil {
+			if node, done, err = client.opts.balancer.Pick(ctx); err != nil {
 				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
 			}
 			scheme, addr, err := parseEndpoint(node.Endpoints)
