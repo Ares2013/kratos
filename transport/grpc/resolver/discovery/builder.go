@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/registry"
@@ -15,14 +17,30 @@ type Option func(o *builder)
 
 // WithLogger with builder logger.
 func WithLogger(logger log.Logger) Option {
-	return func(o *builder) {
-		o.logger = logger
+	return func(b *builder) {
+		b.logger = logger
+	}
+}
+
+// WithTimeout with timeout option.
+func WithTimeout(timeout time.Duration) Option {
+	return func(b *builder) {
+		b.timeout = timeout
+	}
+}
+
+// WithInsecure with isSecure option.
+func WithInsecure(insecure bool) Option {
+	return func(b *builder) {
+		b.insecure = insecure
 	}
 }
 
 type builder struct {
 	discoverer registry.Discovery
 	logger     log.Logger
+	timeout    time.Duration
+	insecure   bool
 }
 
 // NewBuilder creates a builder which is used to factory registry resolvers.
@@ -30,6 +48,8 @@ func NewBuilder(d registry.Discovery, opts ...Option) resolver.Builder {
 	b := &builder{
 		discoverer: d,
 		logger:     log.DefaultLogger,
+		timeout:    time.Second * 10,
+		insecure:   false,
 	}
 	for _, o := range opts {
 		o(b)
@@ -37,23 +57,39 @@ func NewBuilder(d registry.Discovery, opts ...Option) resolver.Builder {
 	return b
 }
 
-func (d *builder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
-	w, err := d.discoverer.Watch(context.Background(), target.Endpoint)
+func (b *builder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	var (
+		err error
+		w   registry.Watcher
+	)
+	done := make(chan bool, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		w, err = b.discoverer.Watch(ctx, target.Endpoint)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(b.timeout):
+		err = errors.New("discovery create watcher overtime")
+	}
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	r := &discoveryResolver{
-		w:      w,
-		cc:     cc,
-		ctx:    ctx,
-		cancel: cancel,
-		log:    log.NewHelper(d.logger),
+		w:        w,
+		cc:       cc,
+		ctx:      ctx,
+		cancel:   cancel,
+		log:      log.NewHelper(b.logger),
+		insecure: b.insecure,
 	}
 	go r.watch()
 	return r, nil
 }
 
-func (d *builder) Scheme() string {
+// Scheme return scheme of discovery
+func (*builder) Scheme() string {
 	return name
 }

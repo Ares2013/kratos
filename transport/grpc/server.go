@@ -2,10 +2,13 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/go-kratos/kratos/v2/internal/endpoint"
 
 	apimd "github.com/go-kratos/kratos/v2/api/metadata"
 	ic "github.com/go-kratos/kratos/v2/internal/context"
@@ -15,14 +18,17 @@ import (
 	"github.com/go-kratos/kratos/v2/transport"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	grpcmd "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 )
 
-var _ transport.Server = (*Server)(nil)
-var _ transport.Endpointer = (*Server)(nil)
+var (
+	_ transport.Server     = (*Server)(nil)
+	_ transport.Endpointer = (*Server)(nil)
+)
 
 // ServerOption is gRPC server option.
 type ServerOption func(o *Server)
@@ -62,6 +68,13 @@ func Middleware(m ...middleware.Middleware) ServerOption {
 	}
 }
 
+// TLSConfig with TLS config.
+func TLSConfig(c *tls.Config) ServerOption {
+	return func(s *Server) {
+		s.tlsConf = c
+	}
+}
+
 // UnaryInterceptor returns a ServerOption that sets the UnaryServerInterceptor for the server.
 func UnaryInterceptor(in ...grpc.UnaryServerInterceptor) ServerOption {
 	return func(s *Server) {
@@ -79,7 +92,8 @@ func Options(opts ...grpc.ServerOption) ServerOption {
 // Server is a gRPC server wrapper.
 type Server struct {
 	*grpc.Server
-	ctx        context.Context
+	baseCtx    context.Context
+	tlsConf    *tls.Config
 	lis        net.Listener
 	once       sync.Once
 	err        error
@@ -98,6 +112,7 @@ type Server struct {
 // NewServer creates a gRPC server by options.
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
+		baseCtx: context.Background(),
 		network: "tcp",
 		address: ":0",
 		timeout: 1 * time.Second,
@@ -107,14 +122,17 @@ func NewServer(opts ...ServerOption) *Server {
 	for _, o := range opts {
 		o(srv)
 	}
-	var ints = []grpc.UnaryServerInterceptor{
+	ints := []grpc.UnaryServerInterceptor{
 		srv.unaryServerInterceptor(),
 	}
 	if len(srv.ints) > 0 {
 		ints = append(ints, srv.ints...)
 	}
-	var grpcOpts = []grpc.ServerOption{
+	grpcOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(ints...),
+	}
+	if srv.tlsConf != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(srv.tlsConf)))
 	}
 	if len(srv.grpcOpts) > 0 {
 		grpcOpts = append(grpcOpts, srv.grpcOpts...)
@@ -140,12 +158,12 @@ func (s *Server) Endpoint() (*url.URL, error) {
 		}
 		addr, err := host.Extract(s.address, lis)
 		if err != nil {
-			lis.Close()
+			_ = lis.Close()
 			s.err = err
 			return
 		}
 		s.lis = lis
-		s.endpoint = &url.URL{Scheme: "grpc", Host: addr}
+		s.endpoint = endpoint.NewEndpoint("grpc", addr, s.tlsConf != nil)
 	})
 	if s.err != nil {
 		return nil, s.err
@@ -158,7 +176,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if _, err := s.Endpoint(); err != nil {
 		return err
 	}
-	s.ctx = ctx
+	s.baseCtx = ctx
 	s.log.Infof("[gRPC] server listening on: %s", s.lis.Addr().String())
 	s.health.Resume()
 	return s.Serve(s.lis)
@@ -174,13 +192,15 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) unaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		ctx, cancel := ic.Merge(ctx, s.ctx)
+		ctx, cancel := ic.Merge(ctx, s.baseCtx)
 		defer cancel()
 		md, _ := grpcmd.FromIncomingContext(ctx)
+		replyHeader := grpcmd.MD{}
 		ctx = transport.NewServerContext(ctx, &Transport{
-			endpoint:  s.endpoint.String(),
-			operation: info.FullMethod,
-			header:    headerCarrier(md),
+			endpoint:    s.endpoint.String(),
+			operation:   info.FullMethod,
+			reqHeader:   headerCarrier(md),
+			replyHeader: headerCarrier(replyHeader),
 		})
 		if s.timeout > 0 {
 			ctx, cancel = context.WithTimeout(ctx, s.timeout)
@@ -192,6 +212,10 @@ func (s *Server) unaryServerInterceptor() grpc.UnaryServerInterceptor {
 		if len(s.middleware) > 0 {
 			h = middleware.Chain(s.middleware...)(h)
 		}
-		return h(ctx, req)
+		reply, err := h(ctx, req)
+		if len(replyHeader) > 0 {
+			_ = grpc.SetHeader(ctx, replyHeader)
+		}
+		return reply, err
 	}
 }

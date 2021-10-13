@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/go-kratos/consul/registry"
+	"github.com/go-kratos/kratos/contrib/registry/consul/v2"
 	"github.com/go-kratos/kratos/examples/helloworld/helloworld"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
@@ -14,16 +14,13 @@ import (
 )
 
 func main() {
-	client, err := api.NewClient(api.DefaultConfig())
+	consulCli, err := api.NewClient(api.DefaultConfig())
 	if err != nil {
 		panic(err)
 	}
-	callHTTP(client)
-	callGRPC(client)
-}
+	r := consul.New(consulCli)
 
-func callGRPC(cli *api.Client) {
-	r := registry.New(cli)
+	// new grpc client
 	conn, err := grpc.DialInsecure(
 		context.Background(),
 		grpc.WithEndpoint("discovery:///helloworld"),
@@ -32,17 +29,11 @@ func callGRPC(cli *api.Client) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client := helloworld.NewGreeterClient(conn)
-	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos_grpc"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("[grpc] SayHello %+v\n", reply)
-}
+	defer conn.Close()
+	gClient := helloworld.NewGreeterClient(conn)
 
-func callHTTP(cli *api.Client) {
-	r := registry.New(cli)
-	conn, err := http.NewClient(
+	// new http client
+	hConn, err := http.NewClient(
 		context.Background(),
 		http.WithMiddleware(
 			recovery.Recovery(),
@@ -53,12 +44,28 @@ func callHTTP(cli *api.Client) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	time.Sleep(time.Millisecond * 250)
-	client := helloworld.NewGreeterHTTPClient(conn)
-	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos_http"})
+	defer hConn.Close()
+	hClient := helloworld.NewGreeterHTTPClient(hConn)
+
+	for {
+		time.Sleep(time.Second)
+		callGRPC(gClient)
+		callHTTP(hClient)
+	}
+}
+
+func callGRPC(client helloworld.GreeterClient) {
+	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("[grpc] SayHello %+v\n", reply)
+}
+
+func callHTTP(client helloworld.GreeterHTTPClient) {
+	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos"})
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("[http] SayHello %s\n", reply.Message)
-
 }

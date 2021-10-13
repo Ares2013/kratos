@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/go-kratos/kratos/v2/errors"
 	"log"
 
 	"github.com/go-kratos/kratos/examples/errors/api"
 	"github.com/go-kratos/kratos/examples/helloworld/helloworld"
 	"github.com/go-kratos/kratos/v2"
+	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/go-kratos/kratos/v2/transport/http"
 )
@@ -18,7 +18,7 @@ var (
 	// Name is the name of the compiled software.
 	Name = "errors"
 	// Version is the version of the compiled software.
-	Version = "v1.0.0"
+	// Version = "v1.0.0"
 )
 
 // server is used to implement helloworld.GreeterServer.

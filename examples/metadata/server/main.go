@@ -18,7 +18,7 @@ var (
 	// Name is the name of the compiled software.
 	Name = "helloworld"
 	// Version is the version of the compiled software.
-	Version = "v1.0.0"
+	// Version = "v1.0.0"
 )
 
 // server is used to implement helloworld.GreeterServer.
@@ -32,8 +32,7 @@ func (s *server) SayHello(ctx context.Context, in *helloworld.HelloRequest) (*he
 	if md, ok := metadata.FromServerContext(ctx); ok {
 		extra = md.Get("x-md-global-extra")
 	}
-	info, _ := kratos.FromContext(ctx)
-	return &helloworld.HelloReply{Message: fmt.Sprintf("Hello %s extra: %s name: %s", in.Name, extra, info.Name())}, nil
+	return &helloworld.HelloReply{Message: fmt.Sprintf("Hello %s extra_meta: %s", in.Name, extra)}, nil
 }
 
 func main() {

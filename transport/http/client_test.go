@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io/ioutil"
 	nethttp "net/http"
@@ -10,14 +11,12 @@ import (
 	"time"
 
 	"github.com/go-kratos/kratos/v2/errors"
-
-	"github.com/stretchr/testify/assert"
-
+	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/registry"
+	"github.com/stretchr/testify/assert"
 )
 
-type mockRoundTripper struct {
-}
+type mockRoundTripper struct{}
 
 func (rt *mockRoundTripper) RoundTrip(req *nethttp.Request) (resp *nethttp.Response, err error) {
 	return
@@ -39,8 +38,22 @@ func TestWithTimeout(t *testing.T) {
 	assert.Equal(t, co.timeout, ov)
 }
 
-func TestWithBalancer(t *testing.T) {
+func TestWithBlock(t *testing.T) {
+	o := WithBlock()
+	co := &clientOptions{}
+	o(co)
+	assert.True(t, co.block)
+}
 
+func TestWithBalancer(t *testing.T) {
+}
+
+func TestWithTLSConfig(t *testing.T) {
+	ov := &tls.Config{}
+	o := WithTLSConfig(ov)
+	co := &clientOptions{}
+	o(co)
+	assert.Same(t, ov, co.tlsConf)
 }
 
 func TestWithUserAgent(t *testing.T) {
@@ -52,6 +65,12 @@ func TestWithUserAgent(t *testing.T) {
 }
 
 func TestWithMiddleware(t *testing.T) {
+	o := &clientOptions{}
+	v := []middleware.Middleware{
+		func(middleware.Handler) middleware.Handler { return nil },
+	}
+	WithMiddleware(v...)(o)
+	assert.Equal(t, v, o.middleware)
 }
 
 func TestWithEndpoint(t *testing.T) {
@@ -63,18 +82,29 @@ func TestWithEndpoint(t *testing.T) {
 }
 
 func TestWithRequestEncoder(t *testing.T) {
-
+	o := &clientOptions{}
+	v := func(ctx context.Context, contentType string, in interface{}) (body []byte, err error) {
+		return nil, nil
+	}
+	WithRequestEncoder(v)(o)
+	assert.NotNil(t, o.encoder)
 }
 
 func TestWithResponseDecoder(t *testing.T) {
-
+	o := &clientOptions{}
+	v := func(ctx context.Context, res *nethttp.Response, out interface{}) error { return nil }
+	WithResponseDecoder(v)(o)
+	assert.NotNil(t, o.decoder)
 }
 
 func TestWithErrorDecoder(t *testing.T) {
+	o := &clientOptions{}
+	v := func(ctx context.Context, res *nethttp.Response) error { return nil }
+	WithErrorDecoder(v)(o)
+	assert.NotNil(t, o.errorDecoder)
 }
 
-type mockDiscovery struct {
-}
+type mockDiscovery struct{}
 
 func (*mockDiscovery) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
 	return nil, nil

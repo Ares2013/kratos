@@ -15,11 +15,11 @@ import (
 // Project is a project template.
 type Project struct {
 	Name string
+	Path string
 }
 
 // New new a project from remote repo.
 func (p *Project) New(ctx context.Context, dir string, layout string, branch string) error {
-
 	to := path.Join(dir, p.Name)
 	if _, err := os.Stat(to); !os.IsNotExist(err) {
 		fmt.Printf("🚫 %s already exists\n", p.Name)
@@ -28,7 +28,10 @@ func (p *Project) New(ctx context.Context, dir string, layout string, branch str
 			Message: "📂 Do you want to override the folder ?",
 			Help:    "Delete the existing folder and create the project.",
 		}
-		survey.AskOne(prompt, &override)
+		e := survey.AskOne(prompt, &override)
+		if e != nil {
+			return e
+		}
 		if !override {
 			return err
 		}
@@ -36,13 +39,16 @@ func (p *Project) New(ctx context.Context, dir string, layout string, branch str
 	}
 	fmt.Printf("🚀 Creating service %s, layout repo is %s, please wait a moment.\n\n", p.Name, layout)
 	repo := base.NewRepo(layout, branch)
-	if err := repo.CopyTo(ctx, to, p.Name, []string{".git", ".github"}); err != nil {
+	if err := repo.CopyTo(ctx, to, p.Path, []string{".git", ".github"}); err != nil {
 		return err
 	}
-	os.Rename(
+	e := os.Rename(
 		path.Join(to, "cmd", "server"),
 		path.Join(to, "cmd", p.Name),
 	)
+	if e != nil {
+		return e
+	}
 	base.Tree(to, dir)
 
 	fmt.Printf("\n🍺 Project creation succeeded %s\n", color.GreenString(p.Name))

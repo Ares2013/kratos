@@ -1,0 +1,3 @@
+./contrib/registry/nacos
+./contrib/registry/kubernetes
+./contrib/registry/zookeeper

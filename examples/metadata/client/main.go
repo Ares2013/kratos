@@ -27,6 +27,7 @@ func callHTTP() {
 	if err != nil {
 		panic(err)
 	}
+	defer conn.Close()
 	client := helloworld.NewGreeterHTTPClient(conn)
 	ctx := context.Background()
 	ctx = metadata.AppendToClientContext(ctx, "x-md-global-extra", "2233")
@@ -34,7 +35,7 @@ func callHTTP() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("[http] SayHello %s\n", reply.Message)
+	log.Printf("[http] SayHello %s\n", reply)
 }
 
 func callGRPC() {
@@ -48,6 +49,7 @@ func callGRPC() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer conn.Close()
 	client := helloworld.NewGreeterClient(conn)
 	ctx := context.Background()
 	ctx = metadata.AppendToClientContext(ctx, "x-md-global-extra", "2233")
@@ -55,5 +57,5 @@ func callGRPC() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("[grpc] SayHello %+v\n", reply)
+	log.Printf("[grpc] SayHello %+v \n", reply)
 }

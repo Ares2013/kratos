@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
-	"time"
 
-	v1 "github.com/go-kratos/kratos/examples/blog/api/blog/v1"
 	"github.com/go-kratos/kratos/examples/blog/internal/conf"
 	"github.com/go-kratos/kratos/v2"
 	"github.com/go-kratos/kratos/v2/config"
@@ -14,11 +11,12 @@ import (
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/go-kratos/kratos/v2/transport/http"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/trace/jaeger"
+	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/semconv"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 )
 
 // go build -ldflags "-X main.Version=x.y.z"
@@ -48,59 +46,51 @@ func newApp(logger log.Logger, hs *http.Server, gs *grpc.Server) *kratos.App {
 	)
 }
 
-func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
+// Set global trace provider
+func setTracerProvider(url string) error {
 	// Create the Jaeger exporter
-	exp, err := jaeger.NewRawExporter(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
+	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tp := tracesdk.NewTracerProvider(
+		// Set the sampling rate based on the parent span to 100%
+		tracesdk.WithSampler(tracesdk.ParentBased(tracesdk.TraceIDRatioBased(1.0))),
 		// Always be sure to batch in production.
 		tracesdk.WithBatcher(exp),
 		// Record information about this application in an Resource.
-		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.ServiceNameKey.String(v1.BlogService_ServiceDesc.ServiceName),
-			attribute.String("environment", "development"),
-			attribute.Int64("ID", 1),
+		tracesdk.WithResource(resource.NewSchemaless(
+			semconv.ServiceNameKey.String(Name),
+			attribute.String("env", "dev"),
 		)),
 	)
-	return tp, nil
+	otel.SetTracerProvider(tp)
+	return nil
 }
 
 func main() {
 	flag.Parse()
 	logger := log.NewStdLogger(os.Stdout)
 
-	config := config.New(
+	cfg := config.New(
 		config.WithSource(
 			file.NewSource(flagconf),
 		),
 	)
-	if err := config.Load(); err != nil {
+	if err := cfg.Load(); err != nil {
 		panic(err)
 	}
 
 	var bc conf.Bootstrap
-	if err := config.Scan(&bc); err != nil {
-		panic(err)
-	}
-	tp, err := tracerProvider(bc.Trace.Endpoint)
-	if err != nil {
+	if err := cfg.Scan(&bc); err != nil {
 		panic(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	defer func(ctx context.Context) {
-		// Do not make the application hang when it is shutdown.
-		ctx, cancel = context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		if err := tp.Shutdown(ctx); err != nil {
-			panic(err)
-		}
-	}(ctx)
+	if err := setTracerProvider(bc.Trace.Endpoint); err != nil {
+		panic(err)
+	}
 
-	app, cleanup, err := initApp(bc.Server, bc.Data, tp, logger)
+	app, cleanup, err := initApp(bc.Server, bc.Data, logger)
 	if err != nil {
 		panic(err)
 	}

@@ -27,6 +27,7 @@ func callHTTP() {
 	if err != nil {
 		panic(err)
 	}
+	defer conn.Close()
 	client := pb.NewGreeterHTTPClient(conn)
 	reply, err := client.SayHello(context.Background(), &pb.HelloRequest{Name: "kratos"})
 	if err != nil {
@@ -35,7 +36,7 @@ func callHTTP() {
 	log.Printf("[http] SayHello %s\n", reply.Message)
 
 	// returns error
-	reply, err = client.SayHello(context.Background(), &pb.HelloRequest{Name: "error"})
+	_, err = client.SayHello(context.Background(), &pb.HelloRequest{Name: "error"})
 	if err != nil {
 		log.Printf("[http] SayHello error: %v\n", err)
 	}
@@ -55,6 +56,7 @@ func callGRPC() {
 	if err != nil {
 		panic(err)
 	}
+	defer conn.Close()
 	client := pb.NewGreeterClient(conn)
 	reply, err := client.SayHello(context.Background(), &pb.HelloRequest{Name: "kratos"})
 	if err != nil {

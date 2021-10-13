@@ -2,47 +2,61 @@ name: Go
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-
   build:
+    name: build & test
     runs-on: ubuntu-latest
+    services:
+      etcd:
+        image: gcr.io/etcd-development/etcd:v3.5.0
+        ports:
+          - 2379:2379
+        env:
+          ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+          ETCD_ADVERTISE_CLIENT_URLS: http://0.0.0.0:2379
+      consul:
+        image: consul:latest
+        ports:
+          - 8500:8500
+
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v2
 
-    - name: Set up Go
-      uses: actions/setup-go@v2
-      with:
-        go-version: 1.16
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16
 
-    - name: Build
-      run: go build ./...
+      - name: Build
+        run: go build ./...
 
-    - name: Test
-      run: go test -race ./...
+      - name: Test
+        run: make test-coverage
 
-    - name: Kratos
-      run: |
-        cd cmd/kratos
-        go build ./...
-        go test ./...
+      - name: Upload coverage to Codecov
+        run: bash <(curl -s https://codecov.io/bash)
 
-    - name: HTTP
-      run: |
-        cd cmd/protoc-gen-go-http
-        go build ./...
-        go test ./...
+      - name: Kratos
+        run: |
+          cd cmd/kratos
+          go build ./...
+          go test ./...
 
-    - name: Examples
-      run: |
-        cd examples
-        go build ./...
-        go test ./...
+      - name: HTTP
+        run: |
+          cd cmd/protoc-gen-go-http
+          go build ./...
+          go test ./...
 
-    - name: Lint
-      run: |
-        go get golang.org/x/lint/golint
-        golint ./...
+      - name: Examples
+        run: |
+          cd examples
+          go build ./...
+          go test ./...

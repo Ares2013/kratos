@@ -5,10 +5,12 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/config"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -38,14 +40,43 @@ const (
     ]
 }`
 
-//	_testYaml = `
-//Foo:
-//    bar :
-//        - {name: nihao,age: 1}
-//        - {name: nihao,age: 1}
-//
-//
-//`
+	_testJSONUpdate = `
+{
+    "test":{
+        "settings":{
+            "int_key":1000,
+            "float_key":1000.1,
+            "duration_key":10000,
+            "string_key":"string_value"
+        },
+        "server":{
+            "addr":"127.0.0.1",
+            "port":8000
+        }
+    },
+    "foo":[
+        {
+            "name":"nihao",
+            "age":18
+        },
+        {
+            "name":"nihao",
+            "age":18
+        }
+    ],
+	"bar":{
+		"event":"update"
+	}
+}`
+
+	//	_testYaml = `
+	//Foo:
+	//    bar :
+	//        - {name: nihao,age: 1}
+	//        - {name: nihao,age: 1}
+	//
+	//
+	//`
 )
 
 //func TestScan(t *testing.T) {
@@ -54,19 +85,84 @@ const (
 
 func TestFile(t *testing.T) {
 	var (
-		path = filepath.Join(os.TempDir(), "test_config")
+		path = filepath.Join(t.TempDir(), "test_config")
 		file = filepath.Join(path, "test.json")
 		data = []byte(_testJSON)
 	)
 	defer os.Remove(path)
-	if err := os.MkdirAll(path, 0700); err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Error(err)
 	}
-	if err := ioutil.WriteFile(file, data, 0666); err != nil {
+	if err := ioutil.WriteFile(file, data, 0o666); err != nil {
 		t.Error(err)
 	}
 	testSource(t, file, data)
 	testSource(t, path, data)
+	testWatchFile(t, file)
+	testWatchDir(t, path, file)
+}
+
+func testWatchFile(t *testing.T, path string) {
+	t.Log(path)
+
+	s := NewSource(path)
+	watch, err := s.Watch()
+	if err != nil {
+		t.Error(err)
+	}
+
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Error(err)
+	}
+	defer f.Close()
+	_, err = f.WriteString(_testJSONUpdate)
+	if err != nil {
+		t.Error(err)
+	}
+	kvs, err := watch.Next()
+	assert.Nil(t, err)
+	assert.Equal(t, string(kvs[0].Value), _testJSONUpdate)
+
+	newFilepath := filepath.Join(filepath.Dir(path), "test1.json")
+	if err = os.Rename(path, newFilepath); err != nil {
+		t.Error(err)
+	}
+	kvs, err = watch.Next()
+	assert.NotNil(t, err)
+	assert.Nil(t, kvs)
+
+	err = watch.Stop()
+	assert.Nil(t, err)
+
+	if err := os.Rename(newFilepath, path); err != nil {
+		t.Error(err)
+	}
+}
+
+func testWatchDir(t *testing.T, path, file string) {
+	t.Log(path)
+	t.Log(file)
+
+	s := NewSource(path)
+	watch, err := s.Watch()
+	if err != nil {
+		t.Error(err)
+	}
+
+	f, err := os.OpenFile(file, os.O_RDWR, 0)
+	if err != nil {
+		t.Error(err)
+	}
+	defer f.Close()
+	_, err = f.WriteString(_testJSONUpdate)
+	if err != nil {
+		t.Error(err)
+	}
+
+	kvs, err := watch.Next()
+	assert.Nil(t, err)
+	assert.Equal(t, string(kvs[0].Value), _testJSONUpdate)
 }
 
 func testSource(t *testing.T, path string, data []byte) {
@@ -83,9 +179,9 @@ func testSource(t *testing.T, path string, data []byte) {
 }
 
 func TestConfig(t *testing.T) {
-	path := filepath.Join(os.TempDir(), "test_config.json")
+	path := filepath.Join(t.TempDir(), "test_config.json")
 	defer os.Remove(path)
-	if err := ioutil.WriteFile(path, []byte(_testJSON), 0666); err != nil {
+	if err := ioutil.WriteFile(path, []byte(_testJSON), 0o666); err != nil {
 		t.Error(err)
 	}
 	c := config.New(config.WithSource(
@@ -97,7 +193,7 @@ func TestConfig(t *testing.T) {
 }
 
 func testConfig(t *testing.T, c config.Config) {
-	var expected = map[string]interface{}{
+	expected := map[string]interface{}{
 		"test.settings.int_key":      int64(1000),
 		"test.settings.float_key":    float64(1000.1),
 		"test.settings.string_key":   "string_value",
@@ -163,7 +259,6 @@ func testConfig(t *testing.T, c config.Config) {
 	if _, err := c.Value("not_found_key").Bool(); errors.Is(err, config.ErrNotFound) {
 		t.Logf("not_found_key not match: %v", err)
 	}
-
 }
 
 func testScan(t *testing.T, c config.Config) {
@@ -193,4 +288,41 @@ func testScan(t *testing.T, c config.Config) {
 		t.Error(err)
 	}
 	t.Log(conf)
+}
+
+func TestMergeDataRace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test_config.json")
+	defer os.Remove(path)
+	if err := ioutil.WriteFile(path, []byte(_testJSON), 0o666); err != nil {
+		t.Error(err)
+	}
+	c := config.New(config.WithSource(
+		NewSource(path),
+	))
+	const count = 80
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+	startCh := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		<-startCh
+		for i := 0; i < count; i++ {
+			var conf struct{}
+			if err := c.Scan(&conf); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		for i := 0; i < count; i++ {
+			if err := c.Load(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	close(startCh)
+	wg.Wait()
 }

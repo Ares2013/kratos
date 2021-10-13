@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -18,8 +19,10 @@ var CmdNew = &cobra.Command{
 	Run:   run,
 }
 
-var repoURL string
-var branch string
+var (
+	repoURL string
+	branch  string
+)
 
 func init() {
 	if repoURL = os.Getenv("KRATOS_LAYOUT_REPO"); repoURL == "" {
@@ -42,14 +45,14 @@ func run(cmd *cobra.Command, args []string) {
 			Message: "What is project name ?",
 			Help:    "Created project name.",
 		}
-		survey.AskOne(prompt, &name)
-		if name == "" {
+		err = survey.AskOne(prompt, &name)
+		if err != nil || name == "" {
 			return
 		}
 	} else {
 		name = args[0]
 	}
-	p := &Project{Name: name}
+	p := &Project{Name: path.Base(name), Path: name}
 	if err := p.New(ctx, wd, repoURL, branch); err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31mERROR: %s\033[m\n", err)
 		return

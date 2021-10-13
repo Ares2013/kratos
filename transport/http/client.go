@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,9 +16,9 @@ import (
 	"github.com/go-kratos/kratos/v2/internal/httputil"
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/registry"
+	"github.com/go-kratos/kratos/v2/selector"
+	"github.com/go-kratos/kratos/v2/selector/wrr"
 	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/go-kratos/kratos/v2/transport/http/balancer"
-	"github.com/go-kratos/kratos/v2/transport/http/balancer/random"
 )
 
 // DecodeErrorFunc is decode error func.
@@ -35,6 +36,7 @@ type ClientOption func(*clientOptions)
 // Client is an HTTP transport client.
 type clientOptions struct {
 	ctx          context.Context
+	tlsConf      *tls.Config
 	timeout      time.Duration
 	endpoint     string
 	userAgent    string
@@ -42,9 +44,10 @@ type clientOptions struct {
 	decoder      DecodeResponseFunc
 	errorDecoder DecodeErrorFunc
 	transport    http.RoundTripper
-	balancer     balancer.Balancer
+	selector     selector.Selector
 	discovery    registry.Discovery
 	middleware   []middleware.Middleware
+	block        bool
 }
 
 // WithTransport with client transport.
@@ -110,45 +113,64 @@ func WithDiscovery(d registry.Discovery) ClientOption {
 	}
 }
 
-// WithBalancer with client balancer.
-// Experimental
-// Notice: This type is EXPERIMENTAL and may be changed or removed in a later release.
-func WithBalancer(b balancer.Balancer) ClientOption {
+// WithSelector with client selector.
+func WithSelector(selector selector.Selector) ClientOption {
 	return func(o *clientOptions) {
-		o.balancer = b
+		o.selector = selector
+	}
+}
+
+// WithBlock with client block.
+func WithBlock() ClientOption {
+	return func(o *clientOptions) {
+		o.block = true
+	}
+}
+
+// WithTLSConfig with tls config.
+func WithTLSConfig(c *tls.Config) ClientOption {
+	return func(o *clientOptions) {
+		o.tlsConf = c
 	}
 }
 
 // Client is an HTTP client.
 type Client struct {
-	opts   clientOptions
-	target *Target
-	r      *resolver
-	cc     *http.Client
+	opts     clientOptions
+	target   *Target
+	r        *resolver
+	cc       *http.Client
+	insecure bool
 }
 
 // NewClient returns an HTTP client.
 func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
 	options := clientOptions{
 		ctx:          ctx,
-		timeout:      500 * time.Millisecond,
+		timeout:      2000 * time.Millisecond,
 		encoder:      DefaultRequestEncoder,
 		decoder:      DefaultResponseDecoder,
 		errorDecoder: DefaultErrorDecoder,
 		transport:    http.DefaultTransport,
-		balancer:     random.New(),
+		selector:     wrr.New(),
 	}
 	for _, o := range opts {
 		o(&options)
 	}
-	target, err := parseTarget(options.endpoint)
+	if options.tlsConf != nil {
+		if tr, ok := options.transport.(*http.Transport); ok {
+			tr.TLSClientConfig = options.tlsConf
+		}
+	}
+	insecure := options.tlsConf == nil
+	target, err := parseTarget(options.endpoint, insecure)
 	if err != nil {
 		return nil, err
 	}
 	var r *resolver
 	if options.discovery != nil {
 		if target.Scheme == "discovery" {
-			if r, err = newResolver(ctx, options.discovery, target, options.balancer); err != nil {
+			if r, err = newResolver(ctx, options.discovery, target, options.selector, options.block, insecure); err != nil {
 				return nil, fmt.Errorf("[http client] new resolver failed!err: %v", options.endpoint)
 			}
 		} else if _, _, err := host.ExtractHostPort(options.endpoint); err != nil {
@@ -156,9 +178,10 @@ func NewClient(ctx context.Context, opts ...ClientOption) (*Client, error) {
 		}
 	}
 	return &Client{
-		opts:   options,
-		target: target,
-		r:      r,
+		opts:     options,
+		target:   target,
+		insecure: insecure,
+		r:        r,
 		cc: &http.Client{
 			Timeout:   options.timeout,
 			Transport: options.transport,
@@ -199,36 +222,42 @@ func (client *Client) Invoke(ctx context.Context, method, path string, args inte
 	}
 	ctx = transport.NewClientContext(ctx, &Transport{
 		endpoint:     client.opts.endpoint,
-		header:       headerCarrier(req.Header),
+		reqHeader:    headerCarrier(req.Header),
 		operation:    c.operation,
 		request:      req,
 		pathTemplate: c.pathTemplate,
 	})
-	return client.invoke(ctx, req, args, reply, c)
+	return client.invoke(ctx, req, args, reply, c, opts...)
 }
 
-func (client *Client) invoke(ctx context.Context, req *http.Request, args interface{}, reply interface{}, c callInfo) error {
+func (client *Client) invoke(ctx context.Context, req *http.Request, args interface{}, reply interface{}, c callInfo, opts ...CallOption) error {
 	h := func(ctx context.Context, in interface{}) (interface{}, error) {
-		var done func(context.Context, balancer.DoneInfo)
+		var done func(context.Context, selector.DoneInfo)
 		if client.r != nil {
 			var (
 				err  error
-				node *registry.ServiceInstance
+				node selector.Node
 			)
-			if node, done, err = client.opts.balancer.Pick(ctx); err != nil {
+			if node, done, err = client.opts.selector.Select(ctx); err != nil {
 				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
 			}
-			scheme, addr, err := parseEndpoint(node.Endpoints)
-			if err != nil {
-				return nil, errors.ServiceUnavailable("NODE_NOT_FOUND", err.Error())
+			if client.insecure {
+				req.URL.Scheme = "http"
+			} else {
+				req.URL.Scheme = "https"
 			}
-			req.URL.Scheme = scheme
-			req.URL.Host = addr
-			req.Host = addr
+			req.URL.Host = node.Address()
+			req.Host = node.Address()
 		}
 		res, err := client.do(ctx, req, c)
 		if done != nil {
-			done(ctx, balancer.DoneInfo{Err: err})
+			done(ctx, selector.DoneInfo{Err: err})
+		}
+		if res != nil {
+			cs := csAttempt{res: res}
+			for _, o := range opts {
+				o.after(&c, &cs)
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -267,6 +296,14 @@ func (client *Client) do(ctx context.Context, req *http.Request, c callInfo) (*h
 		return nil, err
 	}
 	return resp, nil
+}
+
+// Close tears down the Transport and all underlying connections.
+func (client *Client) Close() error {
+	if client.r != nil {
+		return client.r.Close()
+	}
+	return nil
 }
 
 // DefaultRequestEncoder is an HTTP request encoder.

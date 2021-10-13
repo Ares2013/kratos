@@ -2,12 +2,15 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/go-kratos/kratos/v2/internal/endpoint"
 
 	"github.com/go-kratos/kratos/v2/internal/host"
 	"github.com/go-kratos/kratos/v2/log"
@@ -17,8 +20,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
-var _ transport.Server = (*Server)(nil)
-var _ transport.Endpointer = (*Server)(nil)
+var (
+	_ transport.Server     = (*Server)(nil)
+	_ transport.Endpointer = (*Server)(nil)
+)
 
 // ServerOption is an HTTP server option.
 type ServerOption func(*Server)
@@ -86,44 +91,64 @@ func ErrorEncoder(en EncodeErrorFunc) ServerOption {
 	}
 }
 
+// TLSConfig with TLS config.
+func TLSConfig(c *tls.Config) ServerOption {
+	return func(o *Server) {
+		o.tlsConf = c
+	}
+}
+
+// StrictSlash is with mux's StrictSlash
+// If true, when the path pattern is "/path/", accessing "/path" will
+// redirect to the former and vice versa.
+func StrictSlash(strictSlash bool) ServerOption {
+	return func(o *Server) {
+		o.strictSlash = strictSlash
+	}
+}
+
 // Server is an HTTP server wrapper.
 type Server struct {
 	*http.Server
-	lis      net.Listener
-	once     sync.Once
-	endpoint *url.URL
-	err      error
-	network  string
-	address  string
-	timeout  time.Duration
-	filters  []FilterFunc
-	ms       []middleware.Middleware
-	dec      DecodeRequestFunc
-	enc      EncodeResponseFunc
-	ene      EncodeErrorFunc
-	router   *mux.Router
-	log      *log.Helper
+	lis         net.Listener
+	tlsConf     *tls.Config
+	once        sync.Once
+	endpoint    *url.URL
+	err         error
+	network     string
+	address     string
+	timeout     time.Duration
+	filters     []FilterFunc
+	ms          []middleware.Middleware
+	dec         DecodeRequestFunc
+	enc         EncodeResponseFunc
+	ene         EncodeErrorFunc
+	strictSlash bool
+	router      *mux.Router
+	log         *log.Helper
 }
 
 // NewServer creates an HTTP server by options.
 func NewServer(opts ...ServerOption) *Server {
 	srv := &Server{
-		network: "tcp",
-		address: ":0",
-		timeout: 1 * time.Second,
-		dec:     DefaultRequestDecoder,
-		enc:     DefaultResponseEncoder,
-		ene:     DefaultErrorEncoder,
-		log:     log.NewHelper(log.DefaultLogger),
+		network:     "tcp",
+		address:     ":0",
+		timeout:     1 * time.Second,
+		dec:         DefaultRequestDecoder,
+		enc:         DefaultResponseEncoder,
+		ene:         DefaultErrorEncoder,
+		strictSlash: true,
+		log:         log.NewHelper(log.DefaultLogger),
 	}
 	for _, o := range opts {
 		o(srv)
 	}
-	srv.Server = &http.Server{
-		Handler: FilterChain(srv.filters...)(srv),
-	}
-	srv.router = mux.NewRouter()
+	srv.router = mux.NewRouter().StrictSlash(srv.strictSlash)
 	srv.router.Use(srv.filter())
+	srv.Server = &http.Server{
+		Handler:   FilterChain(srv.filters...)(srv.router),
+		TLSConfig: srv.tlsConf,
+	}
 	return srv
 }
 
@@ -147,20 +172,30 @@ func (s *Server) HandleFunc(path string, h http.HandlerFunc) {
 	s.router.HandleFunc(path, h)
 }
 
+// HandleHeader registers a new route with a matcher for the header.
+func (s *Server) HandleHeader(key, val string, h http.HandlerFunc) {
+	s.router.Headers(key, val).Handler(h)
+}
+
 // ServeHTTP should write reply headers and data to the ResponseWriter and then return.
 func (s *Server) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-	s.router.ServeHTTP(res, req)
+	s.Handler.ServeHTTP(res, req)
 }
 
 func (s *Server) filter() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ctx, cancel := context.WithCancel(req.Context())
-			defer cancel()
+			var (
+				ctx    context.Context
+				cancel context.CancelFunc
+			)
 			if s.timeout > 0 {
-				ctx, cancel = context.WithTimeout(ctx, s.timeout)
-				defer cancel()
+				ctx, cancel = context.WithTimeout(req.Context(), s.timeout)
+			} else {
+				ctx, cancel = context.WithCancel(req.Context())
 			}
+			defer cancel()
+
 			pathTemplate := req.URL.Path
 			if route := mux.CurrentRoute(req); route != nil {
 				// /path/123 -> /path/{id}
@@ -169,14 +204,10 @@ func (s *Server) filter() mux.MiddlewareFunc {
 			tr := &Transport{
 				endpoint:     s.endpoint.String(),
 				operation:    pathTemplate,
-				header:       headerCarrier(req.Header),
+				reqHeader:    headerCarrier(req.Header),
+				replyHeader:  headerCarrier(w.Header()),
 				request:      req,
 				pathTemplate: pathTemplate,
-			}
-			if r := mux.CurrentRoute(req); r != nil {
-				if path, err := r.GetPathTemplate(); err == nil {
-					tr.operation = path
-				}
 			}
 			ctx = transport.NewServerContext(ctx, tr)
 			next.ServeHTTP(w, req.WithContext(ctx))
@@ -201,7 +232,8 @@ func (s *Server) Endpoint() (*url.URL, error) {
 			return
 		}
 		s.lis = lis
-		s.endpoint = &url.URL{Scheme: "http", Host: addr}
+
+		s.endpoint = endpoint.NewEndpoint("http", addr, s.tlsConf != nil)
 	})
 	if s.err != nil {
 		return nil, s.err
@@ -218,7 +250,13 @@ func (s *Server) Start(ctx context.Context) error {
 		return ctx
 	}
 	s.log.Infof("[HTTP] server listening on: %s", s.lis.Addr().String())
-	if err := s.Serve(s.lis); !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if s.tlsConf != nil {
+		err = s.ServeTLS(s.lis, "", "")
+	} else {
+		err = s.Serve(s.lis)
+	}
+	if !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
@@ -227,5 +265,5 @@ func (s *Server) Start(ctx context.Context) error {
 // Stop stop the HTTP server.
 func (s *Server) Stop(ctx context.Context) error {
 	s.log.Info("[HTTP] server stopping")
-	return s.Shutdown(context.Background())
+	return s.Shutdown(ctx)
 }
