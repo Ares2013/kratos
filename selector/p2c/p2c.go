@@ -35,17 +35,7 @@ type options struct {
 
 // New creates a p2c selector.
 func New(opts ...Option) selector.Selector {
-	var option options
-	for _, opt := range opts {
-		opt(&option)
-	}
-	return &selector.Default{
-		NodeBuilder: &ewma.Builder{},
-		Balancer: &Balancer{
-			r: rand.New(rand.NewSource(time.Now().UnixNano())),
-		},
-		Filters: option.filters,
-	}
+	return NewBuilder(opts...).Build()
 }
 
 // Balancer is p2c selector.
@@ -56,8 +46,9 @@ type Balancer struct {
 
 // choose two distinct nodes.
 func (s *Balancer) prePick(nodes []selector.WeightedNode) (nodeA selector.WeightedNode, nodeB selector.WeightedNode) {
-	a := s.r.Intn(len(nodes))
-	b := s.r.Intn(len(nodes) - 1)
+	source := rand.NewSource(time.Now().UnixNano())
+	a := rand.New(source).Intn(len(nodes))
+	b := rand.New(source).Intn(len(nodes) - 1)
 	if b >= a {
 		b = b + 1
 	}
@@ -76,19 +67,40 @@ func (s *Balancer) Pick(ctx context.Context, nodes []selector.WeightedNode) (sel
 
 	var pc, upc selector.WeightedNode
 	nodeA, nodeB := s.prePick(nodes)
-	// meta.Weight为服务发布者在discovery中设置的权重
+	// meta.Weight is the weight set by the service publisher in discovery
 	if nodeB.Weight() > nodeA.Weight() {
 		pc, upc = nodeB, nodeA
 	} else {
 		pc, upc = nodeA, nodeB
 	}
 
-	// 如果落选节点在forceGap期间内从来没有被选中一次，则强制选一次
-	// 利用强制的机会，来触发成功率、延迟的更新
+	// If the failed node has never been selected once during forceGap, it is forced to be selected once
+	// Take advantage of forced opportunities to trigger updates of success rate and delay
 	if upc.PickElapsed() > forcePick && atomic.CompareAndSwapInt64(&s.lk, 0, 1) {
 		pc = upc
 		atomic.StoreInt64(&s.lk, 0)
 	}
 	done := pc.Pick()
 	return pc, done, nil
+}
+
+// NewBuilder returns a selector builder with p2c balancer
+func NewBuilder(opts ...Option) selector.Builder {
+	var option options
+	for _, opt := range opts {
+		opt(&option)
+	}
+	return &selector.DefaultBuilder{
+		Filters:  option.filters,
+		Balancer: &Builder{},
+		Node:     &ewma.Builder{},
+	}
+}
+
+// Builder is p2c builder
+type Builder struct{}
+
+// Build creates Balancer
+func (b *Builder) Build() selector.Balancer {
+	return &Balancer{r: rand.New(rand.NewSource(time.Now().UnixNano()))}
 }

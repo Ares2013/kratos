@@ -80,8 +80,8 @@ func WithBalancerName(name string) ClientOption {
 	}
 }
 
-// WithSelectFilter with select filters
-func WithSelectFilter(filters ...selector.Filter) ClientOption {
+// WithFilter with select filters
+func WithFilter(filters ...selector.Filter) ClientOption {
 	return func(o *clientOptions) {
 		o.filters = filters
 	}
