@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-kratos/kratos/v2/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/go-kratos/kratos/v2/errors"
 )
 
 // Tracer is otel span tracer
@@ -24,19 +25,20 @@ type Tracer struct {
 func NewTracer(kind trace.SpanKind, opts ...Option) *Tracer {
 	op := options{
 		propagator: propagation.NewCompositeTextMapPropagator(Metadata{}, propagation.Baggage{}, propagation.TraceContext{}),
+		tracerName: "kratos",
 	}
 	for _, o := range opts {
 		o(&op)
 	}
-	if op.tracerProvider != nil {
-		otel.SetTracerProvider(op.tracerProvider)
+	if op.tracerProvider == nil {
+		op.tracerProvider = otel.GetTracerProvider()
 	}
 
 	switch kind {
 	case trace.SpanKindClient:
-		return &Tracer{tracer: otel.Tracer("kratos"), kind: kind, opt: &op}
+		return &Tracer{tracer: op.tracerProvider.Tracer(op.tracerName), kind: kind, opt: &op}
 	case trace.SpanKindServer:
-		return &Tracer{tracer: otel.Tracer("kratos"), kind: kind, opt: &op}
+		return &Tracer{tracer: op.tracerProvider.Tracer(op.tracerName), kind: kind, opt: &op}
 	default:
 		panic(fmt.Sprintf("unsupported span kind: %v", kind))
 	}
@@ -58,7 +60,7 @@ func (t *Tracer) Start(ctx context.Context, operation string, carrier propagatio
 }
 
 // End finish tracing span
-func (t *Tracer) End(ctx context.Context, span trace.Span, m interface{}, err error) {
+func (t *Tracer) End(_ context.Context, span trace.Span, m interface{}, err error) {
 	if err != nil {
 		span.RecordError(err)
 		if e := errors.FromError(err); e != nil {

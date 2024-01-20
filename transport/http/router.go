@@ -3,8 +3,16 @@ package http
 import (
 	"net/http"
 	"path"
-	"sync"
 )
+
+// WalkRouteFunc is the type of the function called for each route visited by Walk.
+type WalkRouteFunc func(RouteInfo) error
+
+// RouteInfo is an HTTP route info.
+type RouteInfo struct {
+	Path   string
+	Method string
+}
 
 // HandlerFunc defines a function to serve HTTP requests.
 type HandlerFunc func(Context) error
@@ -12,7 +20,6 @@ type HandlerFunc func(Context) error
 // Router is an HTTP router.
 type Router struct {
 	prefix  string
-	pool    sync.Pool
 	srv     *Server
 	filters []FilterFunc
 }
@@ -22,9 +29,6 @@ func newRouter(prefix string, srv *Server, filters ...FilterFunc) *Router {
 		prefix:  prefix,
 		srv:     srv,
 		filters: filters,
-	}
-	r.pool.New = func() interface{} {
-		return &wrapper{router: r}
 	}
 	return r
 }
@@ -40,13 +44,11 @@ func (r *Router) Group(prefix string, filters ...FilterFunc) *Router {
 // Handle registers a new route with a matcher for the URL path and method.
 func (r *Router) Handle(method, relativePath string, h HandlerFunc, filters ...FilterFunc) {
 	next := http.Handler(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-		ctx := r.pool.Get().(Context)
+		ctx := &wrapper{router: r}
 		ctx.Reset(res, req)
 		if err := h(ctx); err != nil {
 			r.srv.ene(res, req, err)
 		}
-		ctx.Reset(nil, nil)
-		r.pool.Put(ctx)
 	}))
 	next = FilterChain(filters...)(next)
 	next = FilterChain(r.filters...)(next)

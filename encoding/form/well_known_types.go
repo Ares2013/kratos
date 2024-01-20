@@ -31,6 +31,8 @@ const (
 	// google.protobuf.Struct.
 	structMessageFullname   protoreflect.FullName    = "google.protobuf.Struct"
 	structFieldsFieldNumber protoreflect.FieldNumber = 1
+
+	fieldMaskFullName protoreflect.FullName = "google.protobuf.FieldMask"
 )
 
 func marshalTimestamp(m protoreflect.Message) (string, error) {
@@ -50,7 +52,7 @@ func marshalTimestamp(m protoreflect.Message) (string, error) {
 	}
 	// Uses RFC 3339, where generated output will be Z-normalized and uses 0, 3,
 	// 6 or 9 fractional digits.
-	t := time.Unix(secs, nanos).UTC()
+	t := time.Unix(secs, nanos).Local()
 	x := t.Format("2006-01-02T15:04:05.000000000")
 	x = strings.TrimSuffix(x, "000")
 	x = strings.TrimSuffix(x, "000")

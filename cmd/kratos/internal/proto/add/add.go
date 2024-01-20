@@ -7,18 +7,23 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/modfile"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // CmdAdd represents the add command.
 var CmdAdd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a proto API template",
-	Long:  "Add a proto API template. Example: kratos add helloworld/v1/hello.proto",
+	Long:  "Add a proto API template. Example: kratos proto add helloworld/v1/hello.proto",
 	Run:   run,
 }
 
-func run(cmd *cobra.Command, args []string) {
-	// kratos proto add helloworld/v1/helloworld.proto
+func run(_ *cobra.Command, args []string) {
+	if len(args) == 0 {
+		fmt.Println("Please enter the proto file or directory")
+		return
+	}
 	input := args[0]
 	n := strings.LastIndex(input, "/")
 	if n == -1 {
@@ -63,7 +68,11 @@ func javaPackage(name string) string {
 }
 
 func serviceName(name string) string {
-	return export(strings.Split(name, ".")[0])
+	return toUpperCamelCase(strings.Split(name, ".")[0])
 }
 
-func export(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
+func toUpperCamelCase(s string) string {
+	s = strings.ReplaceAll(s, "_", " ")
+	s = cases.Title(language.Und, cases.NoLower).String(s)
+	return strings.ReplaceAll(s, " ", "")
+}

@@ -6,22 +6,26 @@ import (
 	"errors"
 	"time"
 
+	"google.golang.org/grpc/attributes"
+	"google.golang.org/grpc/resolver"
+
+	"github.com/go-kratos/aegis/subset"
 	"github.com/go-kratos/kratos/v2/internal/endpoint"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/registry"
-	"google.golang.org/grpc/attributes"
-	"google.golang.org/grpc/resolver"
 )
 
 type discoveryResolver struct {
-	w   registry.Watcher
-	cc  resolver.ClientConn
-	log *log.Helper
+	w  registry.Watcher
+	cc resolver.ClientConn
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	insecure bool
+	insecure    bool
+	debugLog    bool
+	selecterKey string
+	subsetSize  int
 }
 
 func (r *discoveryResolver) watch() {
@@ -36,7 +40,7 @@ func (r *discoveryResolver) watch() {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			r.log.Errorf("[resolver] Failed to watch discovery endpoint: %v", err)
+			log.Errorf("[resolver] Failed to watch discovery endpoint: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -45,60 +49,67 @@ func (r *discoveryResolver) watch() {
 }
 
 func (r *discoveryResolver) update(ins []*registry.ServiceInstance) {
-	addrs := make([]resolver.Address, 0)
-	endpoints := make(map[string]struct{})
+	var (
+		endpoints = make(map[string]struct{})
+		filtered  = make([]*registry.ServiceInstance, 0, len(ins))
+	)
 	for _, in := range ins {
-		endpoint, err := endpoint.ParseEndpoint(in.Endpoints, "grpc", !r.insecure)
+		ept, err := endpoint.ParseEndpoint(in.Endpoints, endpoint.Scheme("grpc", !r.insecure))
 		if err != nil {
-			r.log.Errorf("[resolver] Failed to parse discovery endpoint: %v", err)
+			log.Errorf("[resolver] Failed to parse discovery endpoint: %v", err)
 			continue
 		}
-		if endpoint == "" {
+		if ept == "" {
 			continue
 		}
 		// filter redundant endpoints
-		if _, ok := endpoints[endpoint]; ok {
+		if _, ok := endpoints[ept]; ok {
 			continue
 		}
-		endpoints[endpoint] = struct{}{}
+		filtered = append(filtered, in)
+	}
+	if r.subsetSize != 0 {
+		filtered = subset.Subset(r.selecterKey, filtered, r.subsetSize)
+	}
+
+	addrs := make([]resolver.Address, 0, len(filtered))
+	for _, in := range filtered {
+		ept, _ := endpoint.ParseEndpoint(in.Endpoints, endpoint.Scheme("grpc", !r.insecure))
+		endpoints[ept] = struct{}{}
 		addr := resolver.Address{
 			ServerName: in.Name,
-			Attributes: parseAttributes(in.Metadata),
-			Addr:       endpoint,
+			Attributes: parseAttributes(in.Metadata).WithValue("rawServiceInstance", in),
+			Addr:       ept,
 		}
-		addr.Attributes = addr.Attributes.WithValue("rawServiceInstance", in)
 		addrs = append(addrs, addr)
 	}
 	if len(addrs) == 0 {
-		r.log.Warnf("[resolver] Zero endpoint found,refused to write, instances: %v", ins)
+		log.Warnf("[resolver] Zero endpoint found,refused to write, instances: %v", ins)
 		return
 	}
 	err := r.cc.UpdateState(resolver.State{Addresses: addrs})
 	if err != nil {
-		r.log.Errorf("[resolver] failed to update state: %s", err)
+		log.Errorf("[resolver] failed to update state: %s", err)
 	}
-	b, _ := json.Marshal(ins)
-	r.log.Infof("[resolver] update instances: %s", b)
+	if r.debugLog {
+		b, _ := json.Marshal(filtered)
+		log.Infof("[resolver] update instances: %s", b)
+	}
 }
 
 func (r *discoveryResolver) Close() {
 	r.cancel()
 	err := r.w.Stop()
 	if err != nil {
-		r.log.Errorf("[resolver] failed to watch top: %s", err)
+		log.Errorf("[resolver] failed to watch top: %s", err)
 	}
 }
 
-func (r *discoveryResolver) ResolveNow(options resolver.ResolveNowOptions) {}
+func (r *discoveryResolver) ResolveNow(_ resolver.ResolveNowOptions) {}
 
-func parseAttributes(md map[string]string) *attributes.Attributes {
-	var a *attributes.Attributes
+func parseAttributes(md map[string]string) (a *attributes.Attributes) {
 	for k, v := range md {
-		if a == nil {
-			a = attributes.New(k, v)
-		} else {
-			a = a.WithValue(k, v)
-		}
+		a = a.WithValue(k, v)
 	}
 	return a
 }

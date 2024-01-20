@@ -9,28 +9,19 @@ import (
 )
 
 const (
-	// Name is wrr balancer name
+	// Name is wrr(Weighted Round Robin) balancer name
 	Name = "wrr"
 )
 
-var _ selector.Balancer = &Balancer{} // Name is balancer name
+var _ selector.Balancer = (*Balancer)(nil) // Name is balancer name
 
-// WithFilter with select filters
-func WithFilter(filters ...selector.Filter) Option {
-	return func(o *options) {
-		o.filters = filters
-	}
-}
-
-// Option is random builder option.
+// Option is wrr builder option.
 type Option func(o *options)
 
-// options is random builder options
-type options struct {
-	filters []selector.Filter
-}
+// options is wrr builder options
+type options struct{}
 
-// Balancer is a random balancer.
+// Balancer is a wrr balancer.
 type Balancer struct {
 	mu            sync.Mutex
 	currentWeight map[string]float64
@@ -77,7 +68,6 @@ func NewBuilder(opts ...Option) selector.Builder {
 		opt(&option)
 	}
 	return &selector.DefaultBuilder{
-		Filters:  option.filters,
 		Balancer: &Builder{},
 		Node:     &direct.Builder{},
 	}

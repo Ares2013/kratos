@@ -2,33 +2,16 @@ package discovery
 
 import (
 	"context"
+	"net/url"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/registry"
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/serviceconfig"
+
+	"github.com/go-kratos/kratos/v2/registry"
 )
-
-type mockLogger struct {
-	level log.Level
-	key   string
-	val   string
-}
-
-func (l *mockLogger) Log(level log.Level, keyvals ...interface{}) error {
-	l.level = level
-	l.key = keyvals[0].(string)
-	l.val = keyvals[1].(string)
-	return nil
-}
-
-func TestWithLogger(t *testing.T) {
-	b := &builder{}
-	WithLogger(&mockLogger{})(b)
-}
 
 func TestWithInsecure(t *testing.T) {
 	b := &builder{}
@@ -47,13 +30,30 @@ func TestWithTimeout(t *testing.T) {
 	}
 }
 
+func TestDisableDebugLog(t *testing.T) {
+	o := &builder{}
+	DisableDebugLog()(o)
+	if o.debugLog {
+		t.Errorf("expected debugLog true, got %v", o.debugLog)
+	}
+}
+
+func TestPrintDebugLog(t *testing.T) {
+	o := &builder{}
+	PrintDebugLog(true)(o)
+	if !o.debugLog {
+		t.Errorf("expected PrintdebugLog true, got %v", o.debugLog)
+	}
+}
+
 type mockDiscovery struct{}
 
-func (m *mockDiscovery) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
+func (m *mockDiscovery) GetService(_ context.Context, _ string) ([]*registry.ServiceInstance, error) {
 	return nil, nil
 }
 
-func (m *mockDiscovery) Watch(ctx context.Context, serviceName string) (registry.Watcher, error) {
+func (m *mockDiscovery) Watch(_ context.Context, _ string) (registry.Watcher, error) {
+	time.Sleep(time.Microsecond * 500)
 	return &testWatch{}, nil
 }
 
@@ -72,18 +72,42 @@ func (m *mockConn) UpdateState(resolver.State) error {
 
 func (m *mockConn) ReportError(error) {}
 
-func (m *mockConn) NewAddress(addresses []resolver.Address) {}
+func (m *mockConn) NewAddress(_ []resolver.Address) {}
 
-func (m *mockConn) NewServiceConfig(serviceConfig string) {}
+func (m *mockConn) NewServiceConfig(_ string) {}
 
-func (m *mockConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
+func (m *mockConn) ParseServiceConfig(_ string) *serviceconfig.ParseResult {
 	return nil
 }
 
 func TestBuilder_Build(t *testing.T) {
-	b := NewBuilder(&mockDiscovery{})
-	_, err := b.Build(resolver.Target{Scheme: resolver.GetDefaultScheme(), Endpoint: "gprc://authority/endpoint"}, &mockConn{}, resolver.BuildOptions{})
+	b := NewBuilder(&mockDiscovery{}, DisableDebugLog())
+	_, err := b.Build(
+		resolver.Target{
+			URL: url.URL{
+				Scheme: resolver.GetDefaultScheme(),
+				Path:   "grpc://authority/endpoint",
+			},
+		},
+		&mockConn{},
+		resolver.BuildOptions{},
+	)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
+		return
+	}
+	timeoutBuilder := NewBuilder(&mockDiscovery{}, WithTimeout(0))
+	_, err = timeoutBuilder.Build(
+		resolver.Target{
+			URL: url.URL{
+				Scheme: resolver.GetDefaultScheme(),
+				Path:   "grpc://authority/endpoint",
+			},
+		},
+		&mockConn{},
+		resolver.BuildOptions{},
+	)
+	if err == nil {
+		t.Errorf("expected error, got %v", err)
 	}
 }

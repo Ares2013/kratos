@@ -1,4 +1,4 @@
-// The package registry simply implements the Kubernetes-based Registry
+// Package kuberegistry registry simply implements the Kubernetes-based Registry
 package kuberegistry
 
 import (
@@ -33,38 +33,37 @@ import (
 // kratos-service-protocols: define the protocols of the service
 //
 // Example Deployment:
-//
-// apiVersion: apps/v1
-// kind: Deployment
-// metadata:
-//  name: nginx
-//  labels:
-//    app: nginx
-// spec:
-//  replicas: 5
-//  selector:
-//    matchLabels:
-//      app: nginx
-//  template:
-//    metadata:
-//      labels:
-//        app: nginx
-//        kratos-service-id: "56991810-c77f-4a95-8190-393efa9c1a61"
-//        kratos-service-app: "nginx"
-//        kratos-service-version: "v3.5.0"
-//      annotations:
-//        kratos-service-protocols: |
-//          {"80": "http"}
-//        kratos-service-metadata: |
-//          {"region": "sh", "zone": "sh001", "cluster": "pd"}
-//    spec:
-//      containers:
-//        - name: nginx
-//          image: nginx:1.7.9
-//          ports:
-//            - containerPort: 80
-//
-//
+/*
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+name: nginx
+labels:
+  app: nginx
+spec:
+replicas: 5
+selector:
+  matchLabels:
+    app: nginx
+template:
+  metadata:
+    labels:
+      app: nginx
+      kratos-service-id: "56991810-c77f-4a95-8190-393efa9c1a61"
+      kratos-service-app: "nginx"
+      kratos-service-version: "v3.5.0"
+    annotations:
+      kratos-service-protocols: |
+        {"80": "http"}
+      kratos-service-metadata: |
+        {"region": "sh", "zone": "sh001", "cluster": "pd"}
+  spec:
+    containers:
+      - name: nginx
+        image: nginx:1.7.9
+        ports:
+          - containerPort: 80
+*/
 const (
 	// LabelsKeyServiceID is used to define the ID of the service
 	LabelsKeyServiceID = "kratos-service-id"
@@ -80,7 +79,7 @@ const (
 	AnnotationsKeyProtocolMap = "kratos-service-protocols"
 )
 
-// The registry simply implements service discovery based on Kubernetes
+// The Registry simply implements service discovery based on Kubernetes
 // It has not been verified in the production environment and is currently for reference only
 type Registry struct {
 	clientSet       *kubernetes.Clientset
@@ -152,14 +151,14 @@ func (s *Registry) Register(ctx context.Context, service *registry.ServiceInstan
 }
 
 // Deregister the registration.
-func (s *Registry) Deregister(ctx context.Context, service *registry.ServiceInstance) error {
+func (s *Registry) Deregister(ctx context.Context, _ *registry.ServiceInstance) error {
 	return s.Register(ctx, &registry.ServiceInstance{
 		Metadata: map[string]string{},
 	})
 }
 
-// Service return the service instances in memory according to the service name.
-func (s *Registry) Service(name string) ([]*registry.ServiceInstance, error) {
+// GetService return the service instances in memory according to the service name.
+func (s *Registry) GetService(_ context.Context, name string) ([]*registry.ServiceInstance, error) {
 	pods, err := s.podLister.List(labels.SelectorFromSet(map[string]string{
 		LabelsKeyServiceName: name,
 	}))
@@ -180,8 +179,8 @@ func (s *Registry) Service(name string) ([]*registry.ServiceInstance, error) {
 	return ret, nil
 }
 
-func (s *Registry) sendLatestInstances(name string, announcement chan []*registry.ServiceInstance) {
-	instances, err := s.Service(name)
+func (s *Registry) sendLatestInstances(ctx context.Context, name string, announcement chan []*registry.ServiceInstance) {
+	instances, err := s.GetService(ctx, name)
 	if err != nil {
 		panic(err)
 	}
@@ -189,7 +188,7 @@ func (s *Registry) sendLatestInstances(name string, announcement chan []*registr
 }
 
 // Watch creates a watcher according to the service name.
-func (s *Registry) Watch(name string) (registry.Watcher, error) {
+func (s *Registry) Watch(ctx context.Context, name string) (registry.Watcher, error) {
 	stopCh := make(chan struct{}, 1)
 	announcement := make(chan []*registry.ServiceInstance, 1)
 	s.podInformer.AddEventHandler(cache.FilteringResourceEventHandler{
@@ -207,13 +206,13 @@ func (s *Registry) Watch(name string) (registry.Watcher, error) {
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				s.sendLatestInstances(name, announcement)
+				s.sendLatestInstances(ctx, name, announcement)
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
-				s.sendLatestInstances(name, announcement)
+				s.sendLatestInstances(ctx, name, announcement)
 			},
 			DeleteFunc: func(obj interface{}) {
-				s.sendLatestInstances(name, announcement)
+				s.sendLatestInstances(ctx, name, announcement)
 			},
 		},
 	})
@@ -260,7 +259,7 @@ func GetNamespace() string {
 	return currentNamespace
 }
 
-// GetNamespace is used to get the name of the Pod where the current container is located
+// GetPodName is used to get the name of the Pod where the current container is located
 func GetPodName() string {
 	return os.Getenv("HOSTNAME")
 }
@@ -301,7 +300,7 @@ func (iter *Iterator) Next() ([]*registry.ServiceInstance, error) {
 	}
 }
 
-// Close is used to close the iterator
+// Stop is used to close the iterator
 func (iter *Iterator) Stop() error {
 	select {
 	case <-iter.stopCh:

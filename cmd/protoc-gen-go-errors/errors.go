@@ -3,16 +3,23 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
-	"github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2/errors"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2/errors"
 )
 
 const (
 	errorsPackage = protogen.GoImportPath("github.com/go-kratos/kratos/v2/errors")
 	fmtPackage    = protogen.GoImportPath("fmt")
 )
+
+var enCases = cases.Title(language.AmericanEnglish, cases.NoLower)
 
 // generateFile generates a _errors.pb.go file containing kratos errors definitions.
 func generateFile(gen *protogen.Plugin, file *protogen.File) *protogen.GeneratedFile {
@@ -42,8 +49,7 @@ func generateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.
 	g.P()
 	index := 0
 	for _, enum := range file.Enums {
-		skip := genErrorsReason(gen, file, g, enum)
-		if !skip {
+		if !genErrorsReason(gen, file, g, enum) {
 			index++
 		}
 	}
@@ -53,7 +59,7 @@ func generateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.
 	}
 }
 
-func genErrorsReason(gen *protogen.Plugin, file *protogen.File, g *protogen.GeneratedFile, enum *protogen.Enum) bool {
+func genErrorsReason(_ *protogen.Plugin, _ *protogen.File, g *protogen.GeneratedFile, enum *protogen.Enum) bool {
 	defaultCode := proto.GetExtension(enum.Desc.Options(), errors.E_DefaultCode)
 	code := 0
 	if ok := defaultCode.(int32); ok != 0 {
@@ -77,11 +83,19 @@ func genErrorsReason(gen *protogen.Plugin, file *protogen.File, g *protogen.Gene
 		if enumCode == 0 {
 			continue
 		}
+
+		comment := v.Comments.Leading.String()
+		if comment == "" {
+			comment = v.Comments.Trailing.String()
+		}
+
 		err := &errorInfo{
 			Name:       string(enum.Desc.Name()),
 			Value:      string(v.Desc.Name()),
 			CamelValue: case2Camel(string(v.Desc.Name())),
 			HTTPCode:   enumCode,
+			Comment:    comment,
+			HasComment: len(comment) > 0,
 		}
 		ew.Errors = append(ew.Errors, err)
 	}
@@ -89,19 +103,33 @@ func genErrorsReason(gen *protogen.Plugin, file *protogen.File, g *protogen.Gene
 		return true
 	}
 	g.P(ew.execute())
+
 	return false
 }
 
 func case2Camel(name string) string {
 	if !strings.Contains(name, "_") {
-		upperName := strings.ToUpper(name)
-		if upperName == name {
+		if name == strings.ToUpper(name) {
 			name = strings.ToLower(name)
 		}
-		return strings.Title(name)
+		return enCases.String(name)
 	}
-	name = strings.ToLower(name)
-	name = strings.Replace(name, "_", " ", -1)
-	name = strings.Title(name)
-	return strings.Replace(name, " ", "", -1)
+	strs := strings.Split(name, "_")
+	words := make([]string, 0, len(strs))
+	for _, w := range strs {
+		hasLower := false
+		for _, r := range w {
+			if unicode.IsLower(r) {
+				hasLower = true
+				break
+			}
+		}
+		if !hasLower {
+			w = strings.ToLower(w)
+		}
+		w = enCases.String(w)
+		words = append(words, w)
+	}
+
+	return strings.Join(words, "")
 }

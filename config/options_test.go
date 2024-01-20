@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestDefaultDecoder(t *testing.T) {
 	target := make(map[string]interface{})
 	err := defaultDecoder(src, target)
 	if err != nil {
-		t.Fatal("err is not nil")
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(target, map[string]interface{}{"service": []byte("config")}) {
 		t.Fatal(`target is not equal to map[string]interface{}{"service": "config"}`)
@@ -28,7 +29,7 @@ func TestDefaultDecoder(t *testing.T) {
 	target = make(map[string]interface{})
 	err = defaultDecoder(src, target)
 	if err != nil {
-		t.Fatal("err is not nil")
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(map[string]interface{}{
 		"service": map[string]interface{}{
@@ -149,7 +150,7 @@ func TestDefaultResolver(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			err := defaultResolver(data)
 			if err != nil {
-				t.Fatal(`err is not nil`)
+				t.Fatal(err)
 			}
 			rd := reader{
 				values: data,
@@ -160,25 +161,25 @@ func TestDefaultResolver(t *testing.T) {
 				case int:
 					if actual, err = v.Int(); err == nil {
 						if !reflect.DeepEqual(test.expect.(int), int(actual.(int64))) {
-							t.Fatal(`expect is not equal to actual`)
+							t.Fatal("expect is not equal to actual")
 						}
 					}
 				case string:
 					if actual, err = v.String(); err == nil {
 						if !reflect.DeepEqual(test.expect, actual) {
-							t.Fatal(`expect is not equal to actual`)
+							t.Fatal("expect is not equal to actual")
 						}
 					}
 				case bool:
 					if actual, err = v.Bool(); err == nil {
 						if !reflect.DeepEqual(test.expect, actual) {
-							t.Fatal(`expect is not equal to actual`)
+							t.Fatal("expect is not equal to actual")
 						}
 					}
 				case float64:
 					if actual, err = v.Float(); err == nil {
 						if !reflect.DeepEqual(test.expect, actual) {
-							t.Fatal(`expect is not equal to actual`)
+							t.Fatal("expect is not equal to actual")
 						}
 					}
 				default:
@@ -195,5 +196,44 @@ func TestDefaultResolver(t *testing.T) {
 				t.Error("value path not found")
 			}
 		})
+	}
+}
+
+func TestExpand(t *testing.T) {
+	tests := []struct {
+		input   string
+		mapping func(string) string
+		want    string
+	}{
+		{
+			input: "${a}",
+			mapping: func(s string) string {
+				return strings.ToUpper(s)
+			},
+			want: "A",
+		},
+		{
+			input: "a",
+			mapping: func(s string) string {
+				return strings.ToUpper(s)
+			},
+			want: "a",
+		},
+	}
+	for _, tt := range tests {
+		if got := expand(tt.input, tt.mapping); got != tt.want {
+			t.Errorf("expand() want: %s, got: %s", tt.want, got)
+		}
+	}
+}
+
+func TestWithMergeFunc(t *testing.T) {
+	c := &options{}
+	a := func(dst, src interface{}) error {
+		return nil
+	}
+	WithMergeFunc(a)(c)
+	if c.merge == nil {
+		t.Fatal("c.merge is nil")
 	}
 }

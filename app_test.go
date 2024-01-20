@@ -2,7 +2,8 @@ package kratos
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net/url"
 	"reflect"
 	"sync"
 	"testing"
@@ -18,9 +19,9 @@ type mockRegistry struct {
 	service map[string]*registry.ServiceInstance
 }
 
-func (r *mockRegistry) Register(ctx context.Context, service *registry.ServiceInstance) error {
+func (r *mockRegistry) Register(_ context.Context, service *registry.ServiceInstance) error {
 	if service == nil || service.ID == "" {
-		return fmt.Errorf("no service id")
+		return errors.New("no service id")
 	}
 	r.lk.Lock()
 	defer r.lk.Unlock()
@@ -29,11 +30,11 @@ func (r *mockRegistry) Register(ctx context.Context, service *registry.ServiceIn
 }
 
 // Deregister the registration.
-func (r *mockRegistry) Deregister(ctx context.Context, service *registry.ServiceInstance) error {
+func (r *mockRegistry) Deregister(_ context.Context, service *registry.ServiceInstance) error {
 	r.lk.Lock()
 	defer r.lk.Unlock()
 	if r.service[service.ID] == nil {
-		return fmt.Errorf("deregister service not found")
+		return errors.New("deregister service not found")
 	}
 	delete(r.service, service.ID)
 	return nil
@@ -46,6 +47,22 @@ func TestApp(t *testing.T) {
 		Name("kratos"),
 		Version("v1.0.0"),
 		Server(hs, gs),
+		BeforeStart(func(_ context.Context) error {
+			t.Log("BeforeStart...")
+			return nil
+		}),
+		BeforeStop(func(_ context.Context) error {
+			t.Log("BeforeStop...")
+			return nil
+		}),
+		AfterStart(func(_ context.Context) error {
+			t.Log("AfterStart...")
+			return nil
+		}),
+		AfterStop(func(_ context.Context) error {
+			t.Log("AfterStop...")
+			return nil
+		}),
 		Registrar(&mockRegistry{service: make(map[string]*registry.ServiceInstance)}),
 	)
 	time.AfterFunc(time.Second, func() {
@@ -92,6 +109,80 @@ func TestApp_Metadata(t *testing.T) {
 }
 
 func TestApp_Endpoint(t *testing.T) {
+	v := []string{"https://go-kratos.dev", "localhost"}
+	var endpoints []*url.URL
+	for _, urlStr := range v {
+		if endpoint, err := url.Parse(urlStr); err != nil {
+			t.Errorf("invalid endpoint:%v", urlStr)
+		} else {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	o := New(Endpoint(endpoints...))
+	if instance, err := o.buildInstance(); err != nil {
+		t.Error("build instance failed")
+	} else {
+		o.instance = instance
+	}
+	if !reflect.DeepEqual(o.Endpoint(), v) {
+		t.Errorf("Endpoint() = %v, want %v", o.Endpoint(), v)
+	}
+}
+
+func TestApp_buildInstance(t *testing.T) {
+	want := struct {
+		id        string
+		name      string
+		version   string
+		metadata  map[string]string
+		endpoints []string
+	}{
+		id:      "1",
+		name:    "kratos",
+		version: "v1.0.0",
+		metadata: map[string]string{
+			"a": "1",
+			"b": "2",
+		},
+		endpoints: []string{"https://go-kratos.dev", "localhost"},
+	}
+	var endpoints []*url.URL
+	for _, urlStr := range want.endpoints {
+		if endpoint, err := url.Parse(urlStr); err != nil {
+			t.Errorf("invalid endpoint:%v", urlStr)
+		} else {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	app := New(
+		ID(want.id),
+		Name(want.name),
+		Version(want.version),
+		Metadata(want.metadata),
+		Endpoint(endpoints...),
+	)
+	if got, err := app.buildInstance(); err != nil {
+		t.Error("build got failed")
+	} else {
+		if got.ID != want.id {
+			t.Errorf("ID() = %v, want %v", got.ID, want.id)
+		}
+		if got.Name != want.name {
+			t.Errorf("Name() = %v, want %v", got.Name, want.name)
+		}
+		if got.Version != want.version {
+			t.Errorf("Version() = %v, want %v", got.Version, want.version)
+		}
+		if !reflect.DeepEqual(got.Endpoints, want.endpoints) {
+			t.Errorf("Endpoint() = %v, want %v", got.Endpoints, want.endpoints)
+		}
+		if !reflect.DeepEqual(got.Metadata, want.metadata) {
+			t.Errorf("Metadata() = %v, want %v", got.Metadata, want.metadata)
+		}
+	}
+}
+
+func TestApp_Context(t *testing.T) {
 	type fields struct {
 		id       string
 		version  string
@@ -154,7 +245,7 @@ func TestApp_Endpoint(t *testing.T) {
 				endpoint []string
 				metadata map[string]string
 			}{
-				id: "3", version: "v3", name: "kratos-v3", endpoint: []string{},
+				id: "3", version: "v3", name: "kratos-v3", endpoint: nil,
 				metadata: map[string]string{},
 			},
 		},

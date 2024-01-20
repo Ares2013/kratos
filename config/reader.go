@@ -8,9 +8,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/imdario/mergo"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/go-kratos/kratos/v2/log"
 )
 
 // Reader is config reader.
@@ -36,18 +37,18 @@ func newReader(opts options) Reader {
 }
 
 func (r *reader) Merge(kvs ...*KeyValue) error {
-	r.lock.Lock()
-	merged, err := cloneMap(r.values)
-	r.lock.Unlock()
+	merged, err := r.cloneMap()
 	if err != nil {
 		return err
 	}
 	for _, kv := range kvs {
 		next := make(map[string]interface{})
 		if err := r.opts.decoder(kv, next); err != nil {
+			log.Errorf("Failed to config decode error: %v key: %s value: %s", err, kv.Key, string(kv.Value))
 			return err
 		}
-		if err := mergo.Map(&merged, convertMap(next), mergo.WithOverride); err != nil {
+		if err := r.opts.merge(&merged, convertMap(next)); err != nil {
+			log.Errorf("Failed to config merge error: %v key: %s value: %s", err, kv.Key, string(kv.Value))
 			return err
 		}
 	}
@@ -75,6 +76,12 @@ func (r *reader) Resolve() error {
 	return r.opts.resolver(r.values)
 }
 
+func (r *reader) cloneMap() (map[string]interface{}, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return cloneMap(r.values)
+}
+
 func cloneMap(src map[string]interface{}) (map[string]interface{}, error) {
 	// https://gist.github.com/soroushjp/0ec92102641ddfc3ad5515ca76405f4d
 	var buf bytes.Buffer
@@ -86,12 +93,12 @@ func cloneMap(src map[string]interface{}) (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	var copy map[string]interface{}
-	err = dec.Decode(&copy)
+	var clone map[string]interface{}
+	err = dec.Decode(&clone)
 	if err != nil {
 		return nil, err
 	}
-	return copy, nil
+	return clone, nil
 }
 
 func convertMap(src interface{}) interface{} {

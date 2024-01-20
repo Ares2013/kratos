@@ -7,14 +7,15 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/go-kratos/kratos/v2/transport"
 	"go.opentelemetry.io/otel/propagation"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-kratos/kratos/v2/transport"
 )
 
-var _ transport.Transporter = &mockTransport{}
+var _ transport.Transporter = (*mockTransport)(nil)
 
 type headerCarrier http.Header
 
@@ -28,6 +29,11 @@ func (hc headerCarrier) Set(key string, value string) {
 	http.Header(hc).Set(key, value)
 }
 
+// Add value to the key-value pair.
+func (hc headerCarrier) Add(key string, value string) {
+	http.Header(hc).Add(key, value)
+}
+
 // Keys lists the keys stored in this carrier.
 func (hc headerCarrier) Keys() []string {
 	keys := make([]string, 0, len(hc))
@@ -37,11 +43,17 @@ func (hc headerCarrier) Keys() []string {
 	return keys
 }
 
+// Values returns a slice value associated with the passed key.
+func (hc headerCarrier) Values(key string) []string {
+	return http.Header(hc).Values(key)
+}
+
 type mockTransport struct {
 	kind      transport.Kind
 	endpoint  string
 	operation string
 	header    headerCarrier
+	request   *http.Request
 }
 
 func (tr *mockTransport) Kind() transport.Kind            { return tr.kind }
@@ -49,6 +61,16 @@ func (tr *mockTransport) Endpoint() string                { return tr.endpoint }
 func (tr *mockTransport) Operation() string               { return tr.operation }
 func (tr *mockTransport) RequestHeader() transport.Header { return tr.header }
 func (tr *mockTransport) ReplyHeader() transport.Header   { return tr.header }
+func (tr *mockTransport) Request() *http.Request {
+	if tr.request == nil {
+		rq, _ := http.NewRequest(http.MethodGet, "/endpoint", nil)
+
+		return rq
+	}
+
+	return tr.request
+}
+func (tr *mockTransport) PathTemplate() string { return "" }
 
 func TestTracer(t *testing.T) {
 	carrier := headerCarrier{}

@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-kratos/kratos/cmd/kratos/v2/internal/base"
-
 	"github.com/spf13/cobra"
+
+	"github.com/go-kratos/kratos/cmd/kratos/v2/internal/base"
 )
 
 // CmdClient represents the source command.
@@ -30,7 +30,7 @@ func init() {
 	CmdClient.Flags().StringVarP(&protoPath, "proto_path", "p", protoPath, "proto path")
 }
 
-func run(cmd *cobra.Command, args []string) {
+func run(_ *cobra.Command, args []string) {
 	if len(args) == 0 {
 		fmt.Println("Please enter the proto file or directory")
 		return
@@ -39,7 +39,7 @@ func run(cmd *cobra.Command, args []string) {
 		err   error
 		proto = strings.TrimSpace(args[0])
 	)
-	if err = look("protoc-gen-go", "protoc-gen-go-grpc", "protoc-gen-go-http", "protoc-gen-go-errors", "protoc-gen-validate", "protoc-gen-openapi"); err != nil {
+	if err = look("protoc-gen-go", "protoc-gen-go-grpc", "protoc-gen-go-http", "protoc-gen-go-errors", "protoc-gen-openapi"); err != nil {
 		// update the kratos plugins
 		cmd := exec.Command("kratos", "upgrade")
 		cmd.Stdout = os.Stdout

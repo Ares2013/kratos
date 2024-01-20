@@ -8,29 +8,29 @@ import (
 )
 
 type env struct {
-	prefixs []string
+	prefixes []string
 }
 
-func NewSource(prefixs ...string) config.Source {
-	return &env{prefixs: prefixs}
+func NewSource(prefixes ...string) config.Source {
+	return &env{prefixes: prefixes}
 }
 
 func (e *env) Load() (kv []*config.KeyValue, err error) {
 	return e.load(os.Environ()), nil
 }
 
-func (e *env) load(envStrings []string) []*config.KeyValue {
+func (e *env) load(envs []string) []*config.KeyValue {
 	var kv []*config.KeyValue
-	for _, envstr := range envStrings {
+	for _, env := range envs {
 		var k, v string
-		subs := strings.SplitN(envstr, "=", 2) //nolint:gomnd
+		subs := strings.SplitN(env, "=", 2) //nolint:gomnd
 		k = subs[0]
 		if len(subs) > 1 {
 			v = subs[1]
 		}
 
-		if len(e.prefixs) > 0 {
-			p, ok := matchPrefix(e.prefixs, k)
+		if len(e.prefixes) > 0 {
+			p, ok := matchPrefix(e.prefixes, k)
 			if !ok || len(p) == len(k) {
 				continue
 			}

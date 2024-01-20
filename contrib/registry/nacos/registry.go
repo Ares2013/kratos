@@ -2,16 +2,20 @@ package nacos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strconv"
 
 	"github.com/nacos-group/nacos-sdk-go/clients/naming_client"
+	"github.com/nacos-group/nacos-sdk-go/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/vo"
 
 	"github.com/go-kratos/kratos/v2/registry"
 )
+
+var ErrServiceInstanceNameEmpty = errors.New("kratos/nacos: ServiceInstance.Name can not be empty")
 
 var (
 	_ registry.Registrar = (*Registry)(nil)
@@ -65,7 +69,7 @@ func New(cli naming_client.INamingClient, opts ...Option) (r *Registry) {
 	op := options{
 		prefix:  "/microservices",
 		cluster: "DEFAULT",
-		group:   "DEFAULT_GROUP",
+		group:   constant.DEFAULT_GROUP,
 		weight:  100,
 		kind:    "grpc",
 	}
@@ -81,7 +85,7 @@ func New(cli naming_client.INamingClient, opts ...Option) (r *Registry) {
 // Register the registration.
 func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) error {
 	if si.Name == "" {
-		return fmt.Errorf("kratos/nacos: serviceInstance.name can not be empty")
+		return ErrServiceInstanceNameEmpty
 	}
 	for _, endpoint := range si.Endpoints {
 		u, err := url.Parse(endpoint)
@@ -167,6 +171,7 @@ func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watc
 func (r *Registry) GetService(_ context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
 	res, err := r.cli.SelectInstances(vo.SelectInstancesParam{
 		ServiceName: serviceName,
+		GroupName:   r.opts.group,
 		HealthyOnly: true,
 	})
 	if err != nil {

@@ -9,16 +9,20 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/protobuf/types/known/structpb"
-
-	"google.golang.org/genproto/protobuf/field_mask"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+const fieldSeparater = "."
+
+var errInvalidFormatMapKey = errors.New("invalid formatting for map key")
 
 // DecodeValues decode url value into proto message.
 func DecodeValues(msg proto.Message, values url.Values) error {
@@ -51,7 +55,7 @@ func populateFieldValues(v protoreflect.Message, fieldPath []string, values []st
 
 		if fd.Message() == nil || fd.Cardinality() == protoreflect.Repeated {
 			if fd.IsMap() && len(fieldPath) > 1 {
-				// post sub field
+				// post subfield
 				return populateMapField(fd, v.Mutable(fd).Map(), []string{fieldPath[1]}, values)
 			}
 			return fmt.Errorf("invalid path: %q is not a message", fieldName)
@@ -77,13 +81,25 @@ func populateFieldValues(v protoreflect.Message, fieldPath []string, values []st
 }
 
 func getFieldDescriptor(v protoreflect.Message, fieldName string) protoreflect.FieldDescriptor {
-	fields := v.Descriptor().Fields()
-	var fd protoreflect.FieldDescriptor
-	if fd = getDescriptorByFieldAndName(fields, fieldName); fd == nil {
-		if v.Descriptor().FullName() == structMessageFullname {
+	var (
+		fields = v.Descriptor().Fields()
+		fd     = getDescriptorByFieldAndName(fields, fieldName)
+	)
+	if fd == nil {
+		switch {
+		case v.Descriptor().FullName() == structMessageFullname:
 			fd = fields.ByNumber(structFieldsFieldNumber)
-		} else if len(fieldName) > 2 && strings.HasSuffix(fieldName, "[]") {
+		case len(fieldName) > 2 && strings.HasSuffix(fieldName, "[]"):
 			fd = getDescriptorByFieldAndName(fields, strings.TrimSuffix(fieldName, "[]"))
+		default:
+			// If the type is map, you get the string "map[kratos]", where "map" is a field of proto and "kratos" is a key of map
+			// Use symbol . for separating fields/structs. (eg. structfield.field)
+			// ref: https://github.com/go-playground/form
+			field, _, err := parseURLQueryMapKey(fieldName)
+			if err != nil {
+				break
+			}
+			fd = getDescriptorByFieldAndName(fields, field)
 		}
 	}
 	return fd
@@ -98,6 +114,9 @@ func getDescriptorByFieldAndName(fields protoreflect.FieldDescriptors, fieldName
 }
 
 func populateField(fd protoreflect.FieldDescriptor, v protoreflect.Message, value string) error {
+	if value == "" {
+		return nil
+	}
 	val, err := parseField(fd, value)
 	if err != nil {
 		return fmt.Errorf("parsing field %q: %w", fd.FullName().Name(), err)
@@ -118,16 +137,20 @@ func populateRepeatedField(fd protoreflect.FieldDescriptor, list protoreflect.Li
 }
 
 func populateMapField(fd protoreflect.FieldDescriptor, mp protoreflect.Map, fieldPath []string, values []string) error {
-	flen := len(fieldPath)
-	vlen := len(values)
-	// post sub key.
-	nkey := flen - 1
-	key, err := parseField(fd.MapKey(), fieldPath[nkey])
+	var (
+		nKey      = len(fieldPath) - 1 // post sub key
+		vKey      = len(values) - 1
+		fieldName = fieldPath[nKey]
+	)
+	_, keyName, err := parseURLQueryMapKey(fieldName)
+	if err != nil {
+		return err
+	}
+	key, err := parseField(fd.MapKey(), keyName)
 	if err != nil {
 		return fmt.Errorf("parsing map key %q: %w", fd.FullName().Name(), err)
 	}
-	vkey := vlen - 1
-	value, err := parseField(fd.MapValue(), values[vkey])
+	value, err := parseField(fd.MapValue(), values[vKey])
 	if err != nil {
 		return fmt.Errorf("parsing map value %q: %w", fd.FullName().Name(), err)
 	}
@@ -282,11 +305,13 @@ func parseMessage(md protoreflect.MessageDescriptor, value string) (protoreflect
 	case "google.protobuf.BytesValue":
 		v, err := base64.StdEncoding.DecodeString(value)
 		if err != nil {
-			return protoreflect.Value{}, err
+			if v, err = base64.URLEncoding.DecodeString(value); err != nil {
+				return protoreflect.Value{}, err
+			}
 		}
 		msg = wrapperspb.Bytes(v)
 	case "google.protobuf.FieldMask":
-		fm := &field_mask.FieldMask{}
+		fm := &fieldmaskpb.FieldMask{}
 		for _, fv := range strings.Split(value, ",") {
 			fm.Paths = append(fm.Paths, jsonSnakeCase(fv))
 		}
@@ -297,6 +322,12 @@ func parseMessage(md protoreflect.MessageDescriptor, value string) (protoreflect
 			return protoreflect.Value{}, err
 		}
 		msg = fm
+	case "google.protobuf.Struct":
+		var v structpb.Struct
+		if err := protojson.Unmarshal([]byte(value), &v); err != nil {
+			return protoreflect.Value{}, err
+		}
+		msg = &v
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type: %q", string(md.FullName()))
 	}
@@ -321,4 +352,26 @@ func jsonSnakeCase(s string) string {
 
 func isASCIIUpper(c byte) bool {
 	return 'A' <= c && c <= 'Z'
+}
+
+// parseURLQueryMapKey parse the url.Values the field name and key name of the value map type key
+// for example: convert "map[key]" to "map" and "key"
+func parseURLQueryMapKey(key string) (string, string, error) {
+	var (
+		startIndex = strings.IndexByte(key, '[')
+		endIndex   = strings.IndexByte(key, ']')
+	)
+	if startIndex < 0 {
+		//nolint:gomnd
+		values := strings.SplitN(key, fieldSeparater, 2)
+		//nolint:gomnd
+		if len(values) != 2 {
+			return "", "", errInvalidFormatMapKey
+		}
+		return values[0], values[1], nil
+	}
+	if startIndex <= 0 || startIndex >= endIndex || len(key) != endIndex+1 {
+		return "", "", errInvalidFormatMapKey
+	}
+	return key[:startIndex], key[startIndex+1 : endIndex], nil
 }

@@ -16,11 +16,12 @@ import (
 )
 
 func TestWrr3(t *testing.T) {
-	p2c := New(WithFilter(filter.Version("v2.0.0")))
+	p2c := New()
 	var nodes []selector.Node
 	for i := 0; i < 3; i++ {
 		addr := fmt.Sprintf("127.0.0.%d:8080", i)
 		nodes = append(nodes, selector.NewNode(
+			"http",
 			addr,
 			&registry.ServiceInstance{
 				ID:       addr,
@@ -40,7 +41,7 @@ func TestWrr3(t *testing.T) {
 			d := time.Duration(rand.Intn(500)) * time.Millisecond
 			lk.Unlock()
 			time.Sleep(d)
-			n, done, err := p2c.Select(context.Background())
+			n, done, err := p2c.Select(context.Background(), selector.WithNodeFilter(filter.Version("v2.0.0")))
 			if err != nil {
 				t.Errorf("expect %v, got %v", nil, err)
 			}
@@ -69,7 +70,7 @@ func TestWrr3(t *testing.T) {
 		t.Errorf("count1(%v) >= int64(4500),", count1)
 	}
 	if count2 <= int64(1500) {
-		t.Errorf("count2(%v) <= int64(1500)", count1)
+		t.Errorf("count2(%v) <= int64(1500)", count2)
 	}
 	if count2 >= int64(4500) {
 		t.Errorf("count2(%v) >= int64(4500),", count2)
@@ -91,11 +92,12 @@ func TestEmpty(t *testing.T) {
 }
 
 func TestOne(t *testing.T) {
-	p2c := New(WithFilter(filter.Version("v2.0.0")))
+	p2c := New()
 	var nodes []selector.Node
 	for i := 0; i < 1; i++ {
 		addr := fmt.Sprintf("127.0.0.%d:8080", i)
 		nodes = append(nodes, selector.NewNode(
+			"http",
 			addr,
 			&registry.ServiceInstance{
 				ID:       addr,
@@ -104,7 +106,7 @@ func TestOne(t *testing.T) {
 			}))
 	}
 	p2c.Apply(nodes)
-	n, done, err := p2c.Select(context.Background())
+	n, done, err := p2c.Select(context.Background(), selector.WithNodeFilter(filter.Version("v2.0.0")))
 	if err != nil {
 		t.Errorf("expect %v, got %v", nil, err)
 	}

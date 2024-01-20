@@ -6,11 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/go-kratos/kratos/v2/config"
 	"github.com/hashicorp/consul/api"
+
+	"github.com/go-kratos/kratos/v2/config"
 )
 
-// Option is etcd config option.
+// Option is consul config option.
 type Option func(o *options)
 
 type options struct {
@@ -18,18 +19,18 @@ type options struct {
 	path string
 }
 
-//  WithContext with registry context.
+// WithContext with registry context.
 func WithContext(ctx context.Context) Option {
-	return Option(func(o *options) {
+	return func(o *options) {
 		o.ctx = ctx
-	})
+	}
 }
 
 // WithPath is config path
 func WithPath(p string) Option {
-	return Option(func(o *options) {
+	return func(o *options) {
 		o.path = p
-	})
+	}
 }
 
 type source struct {
@@ -71,6 +72,9 @@ func (s *source) Load() ([]*config.KeyValue, error) {
 	kvs := make([]*config.KeyValue, 0)
 	for _, item := range kv {
 		k := strings.TrimPrefix(item.Key, pathPrefix)
+		if k == "" {
+			continue
+		}
 		kvs = append(kvs, &config.KeyValue{
 			Key:    k,
 			Value:  item.Value,

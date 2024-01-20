@@ -11,7 +11,7 @@ import (
 	"github.com/go-kratos/kratos/v2/transport"
 )
 
-var _ transport.Transporter = &Transport{}
+var _ transport.Transporter = (*Transport)(nil)
 
 type Transport struct {
 	kind      transport.Kind
@@ -94,6 +94,86 @@ func TestHTTP(t *testing.T) {
 			v, e := next(test.ctx, "req.args")
 			t.Logf("[%s]reply: %v, error: %v", test.name, v, e)
 			t.Logf("[%s]log:%s", test.name, bf.String())
+		})
+	}
+}
+
+type (
+	dummy struct {
+		field string
+	}
+	dummyStringer struct {
+		field string
+	}
+	dummyStringerRedacter struct {
+		field string
+	}
+)
+
+func (d *dummyStringer) String() string {
+	return "my value"
+}
+
+func (d *dummyStringerRedacter) String() string {
+	return "my value"
+}
+
+func (d *dummyStringerRedacter) Redact() string {
+	return "my value redacted"
+}
+
+func TestExtractArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		req      interface{}
+		expected string
+	}{
+		{
+			name:     "dummyStringer",
+			req:      &dummyStringer{field: ""},
+			expected: "my value",
+		}, {
+			name:     "dummy",
+			req:      &dummy{field: "value"},
+			expected: "&{field:value}",
+		}, {
+			name:     "dummyStringerRedacter",
+			req:      &dummyStringerRedacter{field: ""},
+			expected: "my value redacted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if value := extractArgs(test.req); value != test.expected {
+				t.Errorf(`The stringified %s structure must be equal to "%s", %v given`, test.name, test.expected, value)
+			}
+		})
+	}
+}
+
+func TestExtractError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantLevel  log.Level
+		wantErrStr string
+	}{
+		{
+			"no error", nil, log.LevelInfo, "",
+		},
+		{
+			"error", errors.New("test error"), log.LevelError, "test error",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			level, errStr := extractError(test.err)
+			if level != test.wantLevel {
+				t.Errorf("want: %d, got: %d", test.wantLevel, level)
+			}
+			if errStr != test.wantErrStr {
+				t.Errorf("want: %s, got: %s", test.wantErrStr, errStr)
+			}
 		})
 	}
 }
